@@ -1,0 +1,4 @@
+# Copy to local.properties (git-ignored). Use the ANON key only, never the service_role key.
+sdk.dir=/path/to/Android/sdk
+supabase.url=https://YOUR-PROJECT.supabase.co
+supabase.anonKey=YOUR_ANON_PUBLIC_KEY
