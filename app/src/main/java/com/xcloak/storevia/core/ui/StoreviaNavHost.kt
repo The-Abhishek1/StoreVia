@@ -23,6 +23,7 @@ import com.xcloak.storevia.R
 import com.xcloak.storevia.feature.admin.PlatformAdminScreen
 import com.xcloak.storevia.feature.customers.CustomerDetailScreen
 import com.xcloak.storevia.feature.customers.CustomersScreen
+import com.xcloak.storevia.feature.cloud.CloudAccountScreen
 import com.xcloak.storevia.feature.data.BackupScreen
 import com.xcloak.storevia.feature.data.ImportExportScreen
 import com.xcloak.storevia.feature.home.HomeScreen
@@ -77,6 +78,7 @@ private object Routes {
     const val REORDER = "reorder"
     const val DATA = "import_export"
     const val PLATFORM_ADMIN = "platform_admin"
+    const val CLOUD_ACCOUNT = "cloud_account"
     const val CUSTOMER = "customer/{id}"
 
     fun product(id: String) = "product/$id"
@@ -223,7 +225,7 @@ fun StoreviaNavHost() {
                     onReorder = { nav.navigate(Routes.REORDER) },
                     onStaff = { nav.navigate(Routes.STAFF) },
                     onAudit = { nav.navigate(Routes.AUDIT) },
-                    onPlatformAdmin = { nav.navigate(Routes.PLATFORM_ADMIN) },
+                    onCloudAccount = { nav.navigate(Routes.CLOUD_ACCOUNT) },
                 )
             }
 
@@ -269,6 +271,12 @@ fun StoreviaNavHost() {
             composable(Routes.STORE_SETTINGS) { StoreSettingsScreen(onBack = { nav.popBackStack() }) }
 
             composable(Routes.PLATFORM_ADMIN) { PlatformAdminScreen(onBack = { nav.popBackStack() }) }
+            composable(Routes.CLOUD_ACCOUNT) {
+                CloudAccountScreen(
+                    onBack = { nav.popBackStack() },
+                    onPlatformAdmin = { nav.navigate(Routes.PLATFORM_ADMIN) },
+                )
+            }
 
             composable(Routes.CUSTOMERS) {
                 CustomersScreen(onBack = { nav.popBackStack() }, onOpen = { nav.navigate(Routes.customer(it)) })

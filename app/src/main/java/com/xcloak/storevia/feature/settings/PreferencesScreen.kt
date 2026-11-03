@@ -23,6 +23,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xcloak.storevia.R
 import com.xcloak.storevia.core.security.DeviceAuth
 import com.xcloak.storevia.data.alerts.AlertNotifier
+import com.xcloak.storevia.core.ui.theme.ThemeMode
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -54,6 +55,21 @@ fun PreferencesScreen(onBack: () -> Unit, vm: PreferencesViewModel = hiltViewMod
         },
     ) { padding ->
         Column(Modifier.padding(padding).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(stringResource(R.string.appearance_title), style = MaterialTheme.typography.titleMedium)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                ThemeMode.entries.forEach { mode ->
+                    FilterChip(
+                        selected = s.themeMode == mode,
+                        onClick = { vm.setThemeMode(mode) },
+                        label = { Text(stringResource(when (mode) {
+                            ThemeMode.SYSTEM -> R.string.theme_system
+                            ThemeMode.LIGHT -> R.string.theme_light
+                            ThemeMode.DARK -> R.string.theme_dark
+                        })) },
+                    )
+                }
+            }
+            HorizontalDivider(Modifier.padding(vertical = 4.dp))
             Text(stringResource(R.string.section_alerts), style = MaterialTheme.typography.titleMedium)
             SwitchRow(stringResource(R.string.alerts_switch), stringResource(R.string.alerts_switch_hint), s.alertsEnabled) { on ->
                 vm.setAlerts(on)

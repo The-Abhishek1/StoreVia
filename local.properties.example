@@ -2,3 +2,4 @@
 sdk.dir=/path/to/Android/sdk
 supabase.url=https://YOUR-PROJECT.supabase.co
 supabase.anonKey=YOUR_ANON_PUBLIC_KEY
+play.proProductId=storevia_pro_monthly

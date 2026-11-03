@@ -29,6 +29,7 @@ android {
 
         buildConfigField("String", "SUPABASE_URL", "\"${localProps.getProperty("supabase.url", "")}\"")
         buildConfigField("String", "SUPABASE_ANON_KEY", "\"${localProps.getProperty("supabase.anonKey", "")}\"")
+        buildConfigField("String", "PRO_PRODUCT_ID", "\"${localProps.getProperty("play.proProductId", "storevia_pro_monthly")}\"")
     }
 
     buildTypes {
@@ -89,8 +90,11 @@ dependencies {
     implementation(libs.supabase.auth)
     implementation(libs.supabase.postgrest)
     implementation(libs.supabase.storage)
+    implementation(libs.supabase.functions)
+    implementation(libs.play.billing)
     implementation(libs.ktor.android)
     implementation(libs.serialization.json)
+    implementation(libs.play.billing)
 
     testImplementation(libs.junit)
     testImplementation(libs.coroutines.test)

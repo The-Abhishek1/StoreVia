@@ -5,6 +5,8 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 
+enum class ThemeMode { SYSTEM, LIGHT, DARK }
+
 // Palette: deep harbour blue for trust, a saffron accent for money/action. High contrast for shop lighting.
 private val Blue = Color(0xFF123B5C)
 private val Saffron = Color(0xFFE8A317)
@@ -26,6 +28,11 @@ private val Dark = darkColorScheme(
 )
 
 @Composable
-fun StoreviaTheme(dark: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
+fun StoreviaTheme(mode: ThemeMode = ThemeMode.SYSTEM, content: @Composable () -> Unit) {
+    val dark = when (mode) {
+        ThemeMode.SYSTEM -> isSystemInDarkTheme()
+        ThemeMode.LIGHT -> false
+        ThemeMode.DARK -> true
+    }
     MaterialTheme(colorScheme = if (dark) Dark else Light, content = content)
 }

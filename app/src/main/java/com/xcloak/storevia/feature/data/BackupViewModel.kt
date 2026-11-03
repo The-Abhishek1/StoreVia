@@ -10,6 +10,7 @@ import com.xcloak.storevia.R
 import com.xcloak.storevia.data.backup.AutoBackup
 import com.xcloak.storevia.data.backup.BackupManager
 import com.xcloak.storevia.data.backup.RestoreCheck
+import com.xcloak.storevia.data.cloud.CloudAccountRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -42,6 +43,7 @@ class BackupViewModel @Inject constructor(
     private val access: Access,
     private val audit: AuditSink,
     private val prefs: com.xcloak.storevia.data.prefs.AppPrefs,
+    private val cloud: CloudAccountRepository,
 ) : ViewModel() {
 
     private val _ui = MutableStateFlow(BackupUi())
@@ -66,6 +68,24 @@ class BackupViewModel @Inject constructor(
         if (ok) audit.log(AuditAction.BACKUP, "Backup saved" + if (passphrase.isNullOrEmpty()) "" else " (passphrase protected)")
         _ui.update { it.copy(busy = false, message = if (ok) R.string.backup_done else R.string.backup_failed) }
         refresh()
+    }
+
+    fun backupToCloud(passphrase: String?) = viewModelScope.launch {
+        if (!access.actor().can(Permission.BACKUP)) { _ui.update { it.copy(message = R.string.err_permission_denied) }; return@launch }
+        if (passphrase.isNullOrBlank()) { _ui.update { it.copy(message = R.string.cloud_backup_passphrase_required) }; return@launch }
+        _ui.update { it.copy(busy = true) }
+        val result = runCatching { cloud.uploadBackup(passphrase) }
+        if (result.isSuccess) audit.log(AuditAction.BACKUP, "Encrypted cloud backup saved")
+        _ui.update { it.copy(busy = false, message = if (result.isSuccess) R.string.cloud_backup_done else R.string.cloud_backup_failed) }
+        refresh()
+    }
+
+    fun restoreCloudBackup() = viewModelScope.launch {
+        if (!access.actor().can(Permission.RESTORE)) { _ui.update { it.copy(message = R.string.err_permission_denied) }; return@launch }
+        _ui.update { it.copy(busy = true) }
+        val bytes = runCatching { cloud.downloadBackup() }.getOrNull()
+        if (bytes == null) { _ui.update { it.copy(busy = false, message = R.string.cloud_backup_restore_failed) }; return@launch }
+        check(bytes, null)
     }
 
     fun startRestore(uri: Uri) = viewModelScope.launch {

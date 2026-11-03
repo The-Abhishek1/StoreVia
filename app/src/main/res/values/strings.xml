@@ -95,7 +95,7 @@
     <string name="field_discount">Discount (₹)</string>
     <string name="edit_quantity">Quantity</string>
     <string name="amount_received">Amount received (₹)</string>
-    <string name="on_khata">On khata: %1$s</string>
+    <string name="on_khata">On credit: %1$s</string>
     <string name="pay_cash">Cash</string>
     <string name="pay_upi">UPI</string>
     <string name="pay_card">Card</string>
@@ -103,7 +103,7 @@
     <string name="negative_stock_warning">Some items are not in stock. Stock will go negative.</string>
     <string name="err_insufficient_stock">Not enough stock for %1$s</string>
     <string name="err_paid_exceeds">Amount received is more than the bill total</string>
-    <string name="err_choose_customer">Choose a customer to put the balance on khata</string>
+    <string name="err_choose_customer">Choose a customer to put the balance on credit</string>
     <string name="err_discount_invalid">Discount can’t exceed the item amount</string>
     <string name="err_barcode_not_found">No product has barcode %1$s</string>
     <string name="err_generic">%1$s</string>
@@ -124,14 +124,14 @@
     <string name="payment_via">%1$s %2$s</string>
     <string name="done">Done</string>
 
-    <!-- Customers and khata -->
-    <string name="more_customers">Customers and khata</string>
+    <!-- Customers and credit -->
+    <string name="more_customers">Customers and credit</string>
     <string name="more_customers_hint">Balances, payments and reminders</string>
     <string name="customers_title">Customers</string>
     <string name="customers_search_hint">Search name or phone</string>
     <string name="customers_empty">No customers yet</string>
     <string name="customers_empty_hint">Add a customer to sell on credit and track what they owe.</string>
-    <string name="total_khata_due">Total khata due</string>
+    <string name="total_khata_due">Total customer credit due</string>
     <string name="owes">Owes %1$s</string>
     <string name="settled">Settled</string>
     <string name="advance">Advance %1$s</string>
@@ -150,7 +150,7 @@
     <string name="ledger_return_credit">Return credit</string>
     <string name="ledger_adjustment">Old balance added</string>
     <string name="ledger_running">Balance %1$s</string>
-    <string name="khata_due_home">Khata due</string>
+    <string name="khata_due_home">Credit due</string>
     <string name="err_credit_limit">Credit limit of %1$s would be exceeded</string>
     <string name="err_exceeds_balance">Amount is more than the balance due</string>
     <string name="err_amount_positive">Enter an amount above zero</string>
@@ -184,7 +184,7 @@
     <string name="reduces_due">Reduces amount due: %1$s</string>
     <string name="refund_to_customer">Refund to customer: %1$s</string>
     <string name="refund_how">Refund as</string>
-    <string name="refund_credit">Khata credit</string>
+    <string name="refund_credit">Credit balance</string>
     <string name="return_confirm">Confirm return</string>
     <string name="returned_label">Returned</string>
     <string name="status_returned">Fully returned</string>
@@ -192,7 +192,7 @@
     <string name="nothing_returnable">Everything on this bill was already returned.</string>
     <string name="err_nothing_to_return">Enter a quantity to return</string>
     <string name="err_exceeds_returnable">That is more than was sold and not yet returned</string>
-    <string name="err_credit_needs_customer">Khata credit needs a customer on the bill</string>
+    <string name="err_credit_needs_customer">Credit balance requires a customer on the bill</string>
 
     <!-- Store settings -->
     <string name="more_store_settings">Store settings</string>
@@ -250,7 +250,7 @@
     <string name="low_stock_title">Low stock</string>
     <string name="low_stock_none">Nothing is below its reorder level</string>
     <string name="low_stock_row">%1$s of %2$s</string>
-    <string name="khata_title">Khata</string>
+    <string name="khata_title">Customer credit</string>
 
     <!-- Backup and restore -->
     <string name="more_backup">Backup and restore</string>
@@ -277,6 +277,12 @@
     <string name="restore_action">Restore</string>
     <string name="backup_done">Backup saved</string>
     <string name="backup_failed">Backup failed. Check the storage location and try again.</string>
+    <string name="cloud_backup_now">Save encrypted backup to cloud</string>
+    <string name="cloud_restore_backup">Restore cloud backup</string>
+    <string name="cloud_backup_done">Encrypted cloud backup saved</string>
+    <string name="cloud_backup_failed">Cloud backup failed. Sign in, connect this store, and check Storage setup.</string>
+    <string name="cloud_backup_restore_failed">Couldn’t download the cloud backup. Sign in and check Storage setup.</string>
+    <string name="cloud_backup_passphrase_required">Choose a passphrase to encrypt a cloud backup.</string>
     <string name="restore_not_backup">This file is not a Storevia backup</string>
     <string name="restore_too_new">This backup is from a newer version of Storevia. Update the app first.</string>
     <string name="restore_corrupt">The backup file is damaged and can’t be used</string>
@@ -292,7 +298,7 @@
     <string name="export_products">Products</string>
     <string name="export_stock">Stock by batch</string>
     <string name="export_sales">Sales</string>
-    <string name="export_customers">Customers and khata</string>
+    <string name="export_customers">Customers and credit</string>
     <string name="import_hint">Fill in the template in Excel or Google Sheets, save as CSV, then choose it here. You see a preview before anything is added.</string>
     <string name="download_template">Download template</string>
     <string name="choose_csv">Choose CSV file</string>
@@ -389,13 +395,13 @@
     <string name="pay_all_cash">All cash</string>
     <string name="pay_all_upi">All UPI</string>
     <string name="pay_all_card">All card</string>
-    <string name="pay_later">Pay later (khata)</string>
+    <string name="pay_later">Pay later (credit)</string>
     <string name="paid_total">Received %1$s</string>
 
     <!-- Cancel bill -->
     <string name="cancel_bill">Cancel bill</string>
     <string name="cancel_bill_title">Cancel this bill?</string>
-    <string name="cancel_bill_body">Stock goes back and any money or khata is reversed. The bill stays in your records marked Cancelled.</string>
+    <string name="cancel_bill_body">Stock goes back and any money or customer credit is reversed. The bill stays in your records marked Cancelled.</string>
     <string name="field_cancel_reason">Reason (optional)</string>
     <string name="status_cancelled">Cancelled</string>
     <string name="cancelled_reason">Cancelled: %1$s</string>
@@ -509,7 +515,7 @@
     <string name="switch_user">Switch user</string>
     <string name="cashier_rules">What cashiers may do</string>
     <string name="cashier_discount">Cashiers can give discounts</string>
-    <string name="cashier_credit">Cashiers can sell on credit (khata)</string>
+    <string name="cashier_credit">Cashiers can sell on credit</string>
     <string name="field_owner_name">Your name</string>
     <string name="field_staff_name">Name</string>
     <string name="field_pin">PIN (4 to 6 digits)</string>
@@ -539,6 +545,22 @@
     <string name="platform_admin_edit">Edit</string>
     <string name="platform_admin_hold">Hold</string>
     <string name="platform_admin_delete">Delete</string>
+    <string name="platform_admin_total_stores">Stores</string>
+    <string name="platform_admin_active_stores">Active</string>
+    <string name="platform_admin_held_stores">On hold</string>
+    <string name="platform_admin_pro_stores">Pro plans</string>
+    <string name="platform_admin_payments">Payments</string>
+    <string name="platform_admin_recorded_payments">Recorded payments</string>
+    <string name="platform_admin_no_stores">No stores have been registered yet.</string>
+    <string name="platform_admin_no_payments">No payment records yet.</string>
+    <string name="platform_admin_delete_confirm">Mark %1$s as deleted? Its data will be retained.</string>
+    <string name="platform_admin_store_unclaimed">Awaiting owner setup</string>
+    <string name="platform_admin_record_payment">Record payment</string>
+    <string name="platform_admin_restore">Restore</string>
+    <string name="platform_admin_owner_email">Owner email</string>
+    <string name="platform_admin_amount_inr">Amount (INR)</string>
+    <string name="platform_admin_payment_note">Payment note</string>
+    <string name="platform_admin_verified_purchase">Google Play verified subscription</string>
     <string name="store_type_title">What type of shop is this?</string>
     <string name="store_type_general">General</string>
     <string name="store_type_medical">Medical</string>
@@ -546,11 +568,42 @@
     <string name="store_type_features">Enabled features</string>
     <string name="feature_batch_tracking">Batch and expiry tracking</string>
     <string name="feature_expiry_tracking">Expiry alerts</string>
-    <string name="feature_khata">Khata / customer credit</string>
+    <string name="feature_khata">Customer credit</string>
     <string name="feature_supplier_balance">Supplier balances</string>
     <string name="feature_wholesale">Wholesale reorder flows</string>
     <string name="audit_title">Activity log</string>
     <string name="audit_empty">Nothing recorded yet</string>
     <string name="audit_empty_hint">Sensitive actions such as discounts, price changes and cancelled bills appear here with who did them.</string>
     <string name="audit_hint">Newest first. This log can’t be edited from the app.</string>
+    <string name="more_cloud_account">Cloud account</string>
+    <string name="more_cloud_account_hint">Sign in, connect this store and sync data</string>
+    <string name="cloud_title">Cloud account</string>
+    <string name="cloud_description">Back up and sync this store across devices.</string>
+    <string name="cloud_email">Email</string>
+    <string name="cloud_password">Password</string>
+    <string name="cloud_sign_in">Sign in</string>
+    <string name="cloud_sign_up">Create account</string>
+    <string name="cloud_mode_sign_in">Sign in</string>
+    <string name="cloud_mode_sign_up">Sign up</string>
+    <string name="cloud_not_configured">Cloud services aren’t configured. Add your Supabase URL and public anon key to local.properties.</string>
+    <string name="cloud_confirmation">Account created. Verify your email, then sign in.</string>
+    <string name="cloud_connected_as">Cloud account: %1$s</string>
+    <string name="cloud_store_binding">Store: %1$s · Role: %2$s</string>
+    <string name="cloud_connect">Connect this store and sync</string>
+    <string name="cloud_sync_now">Sync now</string>
+    <string name="cloud_sign_out">Sign out</string>
+    <string name="cloud_sync_result">Sync complete · %1$d sent · %2$d received</string>
+    <string name="cloud_connection_ready">Account signed in. Connect this phone’s store to enable sync.</string>
+    <string name="cloud_plan_status">%1$s plan · %2$s</string>
+    <string name="cloud_plan_free">Free</string>
+    <string name="cloud_plan_pro">Pro</string>
+    <string name="cloud_plan_expires">Renews or expires: %1$s</string>
+    <string name="cloud_pro_offer">Pro subscription: %1$s, %2$s</string>
+    <string name="cloud_pro_loading">Loading Pro offer from Google Play…</string>
+    <string name="cloud_upgrade_pro">Upgrade to Pro</string>
+    <string name="cloud_pro_renewal_note">Subscription renews automatically. Manage or cancel it in Google Play.</string>
+    <string name="appearance_title">Appearance</string>
+    <string name="theme_system">System</string>
+    <string name="theme_light">Light</string>
+    <string name="theme_dark">Dark</string>
 </resources>

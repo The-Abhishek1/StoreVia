@@ -10,6 +10,7 @@ import com.xcloak.storevia.data.alerts.AlertPlan
 import com.xcloak.storevia.data.alerts.AlertScheduler
 import com.xcloak.storevia.data.prefs.AppPrefs
 import com.xcloak.storevia.data.prefs.AppSettings
+import com.xcloak.storevia.core.ui.theme.ThemeMode
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.StateFlow
@@ -31,6 +32,7 @@ class PreferencesViewModel @Inject constructor(
     }
 
     fun setExpiryDays(days: Int) = prefs.update { copy(expiryWarnDays = days) }
+    fun setThemeMode(mode: ThemeMode) = prefs.update { copy(themeMode = mode) }
 
     fun setAlertHour(hour: Int) {
         prefs.update { copy(alertHour = hour) }

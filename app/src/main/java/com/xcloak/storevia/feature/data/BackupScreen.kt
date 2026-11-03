@@ -31,6 +31,7 @@ fun BackupScreen(onBack: () -> Unit, vm: BackupViewModel = hiltViewModel()) {
     val ui by vm.ui.collectAsStateWithLifecycle()
     var passphraseForBackup by remember { mutableStateOf<String?>(null) }
     var askBackupPassphrase by remember { mutableStateOf(false) }
+    var backupToCloud by remember { mutableStateOf(false) }
     var restoreFromAuto by remember { mutableStateOf<AutoBackup?>(null) }
     val canRestore = can(Permission.RESTORE)
 
@@ -69,10 +70,18 @@ fun BackupScreen(onBack: () -> Unit, vm: BackupViewModel = hiltViewModel()) {
                     Text(stringResource(R.string.backup_now))
                 }
                 Text(stringResource(R.string.backup_now_hint), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
+                OutlinedButton(
+                    onClick = { backupToCloud = true; askBackupPassphrase = true },
+                    enabled = !ui.busy,
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp).height(48.dp),
+                ) { Text(stringResource(R.string.cloud_backup_now)) }
             }
             item {
                 if (canRestore) OutlinedButton(onClick = { openLauncher.launch(arrayOf("*/*")) }, enabled = !ui.busy, modifier = Modifier.fillMaxWidth().height(48.dp)) {
                     Text(stringResource(R.string.restore_from_file))
+                }
+                if (canRestore) OutlinedButton(onClick = vm::restoreCloudBackup, enabled = !ui.busy, modifier = Modifier.fillMaxWidth().padding(top = 8.dp).height(48.dp)) {
+                    Text(stringResource(R.string.cloud_restore_backup))
                 }
             }
             if (ui.busy) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
@@ -98,7 +107,16 @@ fun BackupScreen(onBack: () -> Unit, vm: BackupViewModel = hiltViewModel()) {
     if (askBackupPassphrase) {
         PassphraseSetDialog(
             onDismiss = { askBackupPassphrase = false },
-            onConfirm = { pass -> askBackupPassphrase = false; passphraseForBackup = pass; createLauncher.launch(fileName) },
+            onConfirm = { pass ->
+                askBackupPassphrase = false
+                if (backupToCloud) {
+                    backupToCloud = false
+                    vm.backupToCloud(pass)
+                } else {
+                    passphraseForBackup = pass
+                    createLauncher.launch(fileName)
+                }
+            },
         )
     }
     restoreFromAuto?.let { b ->

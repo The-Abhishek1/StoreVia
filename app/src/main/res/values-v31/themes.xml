@@ -1,0 +1,9 @@
+<resources>
+    <style name="Theme.Storevia" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">#F6F8FA</item>
+        <item name="android:colorAccent">#E8A317</item>
+        <item name="android:windowSplashScreenBackground">#F6F8FA</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/ic_storevia_mark</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">#FFFFFF</item>
+    </style>
+</resources>

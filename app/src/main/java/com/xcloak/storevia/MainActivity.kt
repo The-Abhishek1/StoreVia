@@ -54,7 +54,8 @@ class MainActivity : ComponentActivity() {
         }
 
         setContent {
-            StoreviaTheme {
+            val settings by prefs.settings.collectAsStateWithLifecycle()
+            StoreviaTheme(settings.themeMode) {
                 val locked by appLock.locked.collectAsStateWithLifecycle()
                 val actor by session.actorState.collectAsStateWithLifecycle()
                 val needsLogin by session.needsLogin.collectAsStateWithLifecycle()

@@ -2,6 +2,7 @@ package com.xcloak.storevia.data.prefs
 
 import android.content.Context
 import com.xcloak.storevia.core.store.StoreType
+import com.xcloak.storevia.core.ui.theme.ThemeMode
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -22,6 +23,9 @@ data class AppSettings(
     val cashierCanDiscount: Boolean = false,
     val cashierCanSellOnCredit: Boolean = false,
     val storeType: StoreType = StoreType.GENERAL,
+    val themeMode: ThemeMode = ThemeMode.SYSTEM,
+    val cloudStoreId: String? = null,
+    val cloudRole: String? = null,
     /** Letter that keeps this phone's invoice numbers different from other phones' ("" for the first phone). */
     val deviceSeries: String = "",
 )
@@ -41,6 +45,9 @@ class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
             .putBoolean("onboarding_done", n.onboardingDone)
             .putBoolean("cashier_discount", n.cashierCanDiscount).putBoolean("cashier_credit", n.cashierCanSellOnCredit)
             .putString("store_type", n.storeType.name)
+            .putString("theme_mode", n.themeMode.name)
+            .putString("cloud_store_id", n.cloudStoreId)
+            .putString("cloud_role", n.cloudRole)
             .putString("device_series", n.deviceSeries)
             .apply()
         _settings.value = n
@@ -70,6 +77,10 @@ class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
         cashierCanDiscount = sp.getBoolean("cashier_discount", false),
         cashierCanSellOnCredit = sp.getBoolean("cashier_credit", false),
         storeType = StoreType.fromName(sp.getString("store_type", StoreType.GENERAL.name)),
+        themeMode = runCatching { ThemeMode.valueOf(sp.getString("theme_mode", ThemeMode.SYSTEM.name) ?: ThemeMode.SYSTEM.name) }
+            .getOrDefault(ThemeMode.SYSTEM),
+        cloudStoreId = sp.getString("cloud_store_id", null),
+        cloudRole = sp.getString("cloud_role", null),
         deviceSeries = sp.getString("device_series", "") ?: "",
     )
 }

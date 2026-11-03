@@ -27,7 +27,7 @@ private class MenuItem(val icon: ImageVector, val title: Int, val hint: Int, val
 fun MoreScreen(
     onCustomers: () -> Unit, onStoreSettings: () -> Unit, onBackup: () -> Unit, onData: () -> Unit, onPrefs: () -> Unit,
     onCategories: () -> Unit, onSuppliers: () -> Unit, onPurchases: () -> Unit, onReorder: () -> Unit,
-    onStaff: () -> Unit, onAudit: () -> Unit, onPlatformAdmin: () -> Unit,
+    onStaff: () -> Unit, onAudit: () -> Unit, onCloudAccount: () -> Unit,
     access: AccessViewModel = hiltViewModel(),
 ) {
     val actor = LocalActor.current
@@ -45,7 +45,7 @@ fun MoreScreen(
         MenuItem(Icons.Filled.Notifications, R.string.more_prefs, R.string.more_prefs_hint, { Permission.MANAGE_SETTINGS in it }, onPrefs),
         MenuItem(Icons.Filled.Badge, R.string.more_staff, R.string.more_staff_hint, { Permission.MANAGE_STAFF in it }, onStaff),
         MenuItem(Icons.Filled.History, R.string.more_audit, R.string.more_audit_hint, { Permission.VIEW_AUDIT in it }, onAudit),
-        MenuItem(Icons.Filled.Dashboard, R.string.more_platform_admin, R.string.more_platform_admin_hint, { Permission.MANAGE_PLATFORM in it }, onPlatformAdmin),
+        MenuItem(Icons.Filled.Cloud, R.string.more_cloud_account, R.string.more_cloud_account_hint, { true }, onCloudAccount),
     ).filter { it.allowed(actor.permissions) }
 
     Column(Modifier.verticalScroll(rememberScrollState())) {
