@@ -20,6 +20,7 @@ data class AppSettings(
     /** App relocks after being in the background this long. */
     val lockGraceSeconds: Int = 60,
     val onboardingDone: Boolean = false,
+    val localOnlyMode: Boolean = false,
     val cashierCanDiscount: Boolean = false,
     val cashierCanSellOnCredit: Boolean = false,
     val storeType: StoreType = StoreType.GENERAL,
@@ -43,6 +44,7 @@ class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
             .putBoolean("alerts", n.alertsEnabled).putInt("expiry_days", n.expiryWarnDays).putInt("alert_hour", n.alertHour)
             .putBoolean("lock", n.lockEnabled).putInt("lock_grace", n.lockGraceSeconds)
             .putBoolean("onboarding_done", n.onboardingDone)
+            .putBoolean("local_only_mode", n.localOnlyMode)
             .putBoolean("cashier_discount", n.cashierCanDiscount).putBoolean("cashier_credit", n.cashierCanSellOnCredit)
             .putString("store_type", n.storeType.name)
             .putString("theme_mode", n.themeMode.name)
@@ -74,6 +76,7 @@ class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
         lockEnabled = sp.getBoolean("lock", false),
         lockGraceSeconds = sp.getInt("lock_grace", 60),
         onboardingDone = sp.getBoolean("onboarding_done", false),
+        localOnlyMode = sp.getBoolean("local_only_mode", false),
         cashierCanDiscount = sp.getBoolean("cashier_discount", false),
         cashierCanSellOnCredit = sp.getBoolean("cashier_credit", false),
         storeType = StoreType.fromName(sp.getString("store_type", StoreType.GENERAL.name)),

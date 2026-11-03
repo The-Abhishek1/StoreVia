@@ -22,7 +22,13 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -46,12 +52,41 @@ class CloudAccountRepository @Inject constructor(
             !BuildConfig.SUPABASE_URL.contains("YOUR-PROJECT")
 
     fun signedInEmail(): String? = client.auth.currentSessionOrNull()?.user?.email
+    val authSessionStatus get() = client.auth.sessionStatus
 
     suspend fun signUp(email: String, password: String) {
         requireConfigured()
-        client.auth.signUpWith(Email) {
+        client.auth.signUpWith(Email, redirectUrl = AUTH_CALLBACK_URL) {
             this.email = email.trim()
             this.password = password
+        }
+        if (signedInEmail() != null) prefs.update { copy(localOnlyMode = false) }
+    }
+
+    suspend fun resendSignupConfirmation(email: String) {
+        requireConfigured()
+        require(email.isNotBlank()) { "Email is required." }
+        withContext(Dispatchers.IO) {
+            val redirect = URLEncoder.encode(AUTH_CALLBACK_URL, StandardCharsets.UTF_8.name())
+            val connection = URL("${BuildConfig.SUPABASE_URL.trimEnd('/')}/auth/v1/resend?redirect_to=$redirect")
+                .openConnection() as HttpURLConnection
+            try {
+                connection.requestMethod = "POST"
+                connection.connectTimeout = 15_000
+                connection.readTimeout = 15_000
+                connection.doOutput = true
+                connection.setRequestProperty("apikey", BuildConfig.SUPABASE_ANON_KEY)
+                connection.setRequestProperty("Authorization", "Bearer ${BuildConfig.SUPABASE_ANON_KEY}")
+                connection.setRequestProperty("Content-Type", "application/json")
+                val body = buildJsonObject {
+                    put("type", "signup")
+                    put("email", email.trim())
+                }
+                connection.outputStream.use { it.write(body.toString().toByteArray(StandardCharsets.UTF_8)) }
+                check(connection.responseCode in 200..299) { "Could not resend confirmation (HTTP ${connection.responseCode})." }
+            } finally {
+                connection.disconnect()
+            }
         }
     }
 
@@ -61,11 +96,12 @@ class CloudAccountRepository @Inject constructor(
             this.email = email.trim()
             this.password = password
         }
+        prefs.update { copy(localOnlyMode = false) }
     }
 
     suspend fun signOut() {
         client.auth.signOut()
-        prefs.update { copy(cloudStoreId = null, cloudRole = null) }
+        prefs.update { copy(cloudStoreId = null, cloudRole = null, localOnlyMode = false) }
     }
 
     suspend fun connectAndSync(): CloudSyncSummary {
@@ -86,7 +122,7 @@ class CloudAccountRepository @Inject constructor(
                     put("p_name", localStore.name)
                 },
             )
-            prefs.update { copy(cloudStoreId = localStore.id, cloudRole = "OWNER") }
+            prefs.update { copy(cloudStoreId = localStore.id, cloudRole = "OWNER", localOnlyMode = false) }
         } else if (remoteStoreId != localStore.id) {
             val previouslyLinkedStore = prefs.settings.value.cloudStoreId
             check(previouslyLinkedStore == null || previouslyLinkedStore == remoteStoreId) {
@@ -98,7 +134,7 @@ class CloudAccountRepository @Inject constructor(
             backupManager.autoBackup()
             val engine = SyncEngine(db, SupabaseRemote(client, remoteStoreId), remoteStoreId)
             engine.resetLocalData()
-            prefs.update { copy(cloudStoreId = remoteStoreId, cloudRole = role) }
+            prefs.update { copy(cloudStoreId = remoteStoreId, cloudRole = role, localOnlyMode = false) }
             val result = syncMutex.withLock { engine.sync() }
             bootstrap.ensureSeeded()
             return CloudSyncSummary(result.pushed, result.pulled)
@@ -119,6 +155,15 @@ class CloudAccountRepository @Inject constructor(
         check(cloudStoreId == localStore.id) { "Connect this store before syncing." }
         val result = syncMutex.withLock { SyncEngine(db, SupabaseRemote(client, cloudStoreId), cloudStoreId).sync() }
         return CloudSyncSummary(result.pushed, result.pulled)
+    }
+
+    suspend fun joinInvitedStore(): CloudSyncSummary {
+        requireConfigured()
+        check(client.auth.currentSessionOrNull() != null) { "Sign in to your cloud account first." }
+        client.postgrest.rpc("accept_invites")
+        val memberships = client.postgrest.rpc("my_store").decodeList<JsonObject>()
+        check(memberships.isNotEmpty()) { "No store invitation found for this account." }
+        return connectAndSync()
     }
 
     suspend fun uploadBackup(passphrase: String?) {
@@ -196,5 +241,8 @@ class CloudAccountRepository @Inject constructor(
         check(isConfigured) { "Cloud services are not configured. Add your Supabase URL and public anon key to local.properties." }
     }
 
-    private companion object { const val BACKUP_BUCKET = "storevia-backups" }
+    private companion object {
+        const val BACKUP_BUCKET = "storevia-backups"
+        const val AUTH_CALLBACK_URL = "storevia://auth/callback"
+    }
 }

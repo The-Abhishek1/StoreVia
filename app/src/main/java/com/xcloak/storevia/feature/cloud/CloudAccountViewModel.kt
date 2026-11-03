@@ -27,6 +27,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import java.security.MessageDigest
@@ -42,6 +43,7 @@ data class CloudAccountUiState(
     val proPrice: String? = null,
     val proBillingPeriod: String? = null,
     val platformAdmin: Boolean = false,
+    val awaitingEmailConfirmation: Boolean = false,
 )
 
 @HiltViewModel
@@ -66,6 +68,13 @@ class CloudAccountViewModel @Inject constructor(
         .build()
 
     init {
+        viewModelScope.launch {
+            cloud.authSessionStatus.collect {
+                val email = cloud.signedInEmail()
+                _ui.update { it.copy(email = email, awaitingEmailConfirmation = if (email == null) it.awaitingEmailConfirmation else false) }
+                if (email != null) refreshPlan()
+            }
+        }
         refreshPlan()
         connectBilling()
     }
@@ -210,6 +219,7 @@ class CloudAccountViewModel @Inject constructor(
                     _ui.value = CloudAccountUiState(
                         email = signedIn,
                         message = if (signedIn == null) "Account created. Verify your email, then sign in." else "Account created. Connect this store to continue.",
+                        awaitingEmailConfirmation = signedIn == null,
                     )
                     refreshPlan()
                 } else {
@@ -223,7 +233,28 @@ class CloudAccountViewModel @Inject constructor(
         }
     }
 
+    fun resendConfirmation(email: String) = viewModelScope.launch {
+        if (email.isBlank()) {
+            _ui.update { it.copy(message = "Enter the email address used to create the account.") }
+            return@launch
+        }
+        _ui.update { it.copy(busy = true, message = null) }
+        try {
+            cloud.resendSignupConfirmation(email)
+            _ui.update { it.copy(busy = false, awaitingEmailConfirmation = true, message = "A fresh confirmation link was sent. Open it soon on this device.") }
+        } catch (e: Exception) {
+            _ui.update { it.copy(busy = false, message = e.message ?: "Could not resend the confirmation email.") }
+        }
+    }
+
+    fun refreshSession() {
+        val email = cloud.signedInEmail()
+        _ui.update { it.copy(email = email, awaitingEmailConfirmation = if (email == null) it.awaitingEmailConfirmation else false) }
+        if (email != null) refreshPlan()
+    }
+
     fun connect() = runCloudAction(cloud::connectAndSync)
+    fun joinStore() = runCloudAction(cloud::joinInvitedStore)
     fun syncNow() = runCloudAction(cloud::syncNow)
 
     fun signOut() = viewModelScope.launch {

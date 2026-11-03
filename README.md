@@ -7,7 +7,7 @@ Android inventory, sales, expiry and khata app for small retailers. Kotlin, Jetp
 2. Copy `local.properties.example` to `local.properties`; set `sdk.dir`, `supabase.url`, `supabase.anonKey` (anon key only).
 3. Sync Gradle, run on a device/emulator (minSdk 24).
 4. JVM tests: `./gradlew test`. Device tests (sale transaction, FEFO, rollback): `./gradlew connectedAndroidTest`.
-5. Supabase: run `supabase/schema.sql` in the SQL editor. Enable email/password sign-up and confirm email in Auth settings. The script creates the private backup bucket and its row-level policies.
+5. Supabase: run `supabase/schema.sql` in the SQL editor. Enable email/password sign-up and confirm email in Auth settings. Add `storevia://auth/callback` to Authentication -> URL Configuration -> Redirect URLs. Signup uses PKCE and returns confirmation callbacks to this Android deep link; the Cloud account screen can resend an expired confirmation. The script creates the private backup bucket and its row-level policies.
 
 ## Architecture rules
 - Money = Long paise. Quantity = Long thousandths. Never floating point.
@@ -33,11 +33,12 @@ every schema change needs a Room migration and a migration test.
 - Each phone gets its own invoice series (INV-00001, then INV-B-00001 on a second phone) so numbers never clash.
 - `supabase/schema.sql` is generated: run `python3 supabase/generate_schema.py` after changing an entity or `SyncTables.kt`.
 - More -> Cloud account provides email sign-up/sign-in, first-store cloud setup, account/role/plan status, manual sync, and sign-out.
+- Startup offers separate online sign-in and account creation choices, platform-admin sign-in, and local-only mode. The platform-admin sign-in screen also offers the local-only business app; this does not grant offline access to platform-admin tools, which remain restricted to authorized online accounts. Returning authenticated stores go directly to the dashboard. Work offline is an explicit local-only fallback with a persistent Connect account action; signing in there routes normal users to store setup/join and allowlisted admins to the admin portal.
 - After a successful connection, WorkManager runs sync every 15 minutes when the network is available. Signing out cancels scheduled sync.
 - A fresh phone can join an existing cloud store when it is still at untouched first-run setup; the app makes a local safety backup before replacing placeholder data. Connecting a populated phone to a different store is rejected without changing local data.
 - Backup and restore includes an encrypted cloud backup in the private `storevia-backups` bucket. Cloud upload requires a passphrase; restore still validates the archive and asks for final confirmation before replacing local data.
-- New stores start on Free. The subscription row is readable by store members and writable only by trusted server functions. The app launches Play Billing for the configured subscription and sends the purchase token to the verifier Edge Function; only Google-verified, store-bound purchases update the Pro entitlement.
-- More -> Cloud account shows the localized Play offer for a connected Free store. The admin portal is visible only to user IDs in `platform_admins`; store CRUD/state and payment actions are handled by the `platform-admin` Edge Function and recorded in `platform_admin_audit`.
+- New stores start on Free. The subscription row is readable by store members and writable only by trusted server functions. Play Billing purchases are verified by the Edge Function; platform admins also have an audited manual plan override for testing before Play Console is configured. Product CSV import and data exports are Pro features. The admin portal lists account email, creation date, and subscription status only, and does not expose merchant/store business data. Local file backup and restore are available on Free; cloud backup requires cloud sign-in and a connected store.
+- More -> Cloud account shows the localized Play offer for a connected Free store. The platform-admin portal is available only to user IDs in `platform_admins`; its account list and Pro test overrides are handled by the `platform-admin` Edge Function and recorded in `platform_admin_audit`.
 - Known limits: two phones editing one product offline keep only one edit; two phones returning the same sold item offline can both
   succeed (stock then ends up one higher than it should); the server cannot enforce field-level rules such as credit limits.
 

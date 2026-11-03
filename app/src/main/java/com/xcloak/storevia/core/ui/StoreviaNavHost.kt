@@ -11,6 +11,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
@@ -106,7 +107,7 @@ private enum class Tab(val route: String, val label: Int, val icon: ImageVector)
 }
 
 @Composable
-fun StoreviaNavHost() {
+fun StoreviaNavHost(localOnly: Boolean = false) {
     val nav = rememberNavController()
     val current by nav.currentBackStackEntryAsState()
     val route = current?.destination?.route
@@ -115,6 +116,16 @@ fun StoreviaNavHost() {
     val showBottomBar = tabs.any { it.route == route }
 
     Scaffold(
+        topBar = {
+            if (localOnly) {
+                Surface(color = MaterialTheme.colorScheme.tertiaryContainer) {
+                    Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(stringResource(R.string.entry_local_only_banner), Modifier.weight(1f), style = MaterialTheme.typography.labelMedium)
+                        TextButton(onClick = { nav.navigate(Routes.CLOUD_ACCOUNT) }) { Text(stringResource(R.string.cloud_connect)) }
+                    }
+                }
+            }
+        },
         bottomBar = {
             if (showBottomBar) NavigationBar {
                 tabs.forEach { tab ->

@@ -40,6 +40,7 @@ fun OnboardingScreen(
     onFinish: () -> Unit,
     onImport: () -> Unit,
     onAddProduct: () -> Unit,
+    cloudConnectRequired: Boolean = false,
     store: StoreSettingsViewModel = hiltViewModel(),
     vm: OnboardingViewModel = hiltViewModel(),
 ) {
@@ -97,9 +98,15 @@ fun OnboardingScreen(
                 else -> {
                     Text(stringResource(R.string.onboarding_step3_title), style = MaterialTheme.typography.headlineSmall)
                     Text(stringResource(R.string.onboarding_step3_body), style = MaterialTheme.typography.bodyLarge)
-                    Button(onClick = { vm.finish(); onImport() }, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text(stringResource(R.string.onboarding_import)) }
-                    OutlinedButton(onClick = { vm.finish(); onAddProduct() }, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text(stringResource(R.string.onboarding_add_first)) }
-                    TextButton(onClick = { vm.finish(); onFinish() }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.onboarding_later)) }
+                    if (cloudConnectRequired) {
+                        Button(onClick = { vm.finish(); onFinish() }, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+                            Text(stringResource(R.string.entry_continue_to_cloud))
+                        }
+                    } else {
+                        Button(onClick = { vm.finish(); onImport() }, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text(stringResource(R.string.onboarding_import)) }
+                        OutlinedButton(onClick = { vm.finish(); onAddProduct() }, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text(stringResource(R.string.onboarding_add_first)) }
+                        TextButton(onClick = { vm.finish(); onFinish() }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.onboarding_later)) }
+                    }
                 }
             }
         }

@@ -13,56 +13,26 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 @Serializable
-data class AdminStoreDetails(
-    val id: String,
-    @SerialName("store_id") val storeId: String,
-    val name: String,
-    val address: String = "",
-    val phone: String = "",
-    val gstin: String? = null,
-)
-
-@Serializable
-data class AdminStore(
+data class AdminSubscription(
     @SerialName("store_id") val storeId: String,
     val plan: String,
     val status: String,
     @SerialName("expires_at") val expiresAt: String? = null,
-    @SerialName("store_type") val storeType: String = "GENERAL",
-    val store: AdminStoreDetails? = null,
 )
 
 @Serializable
-data class AdminPayment(
-    val id: String,
-    @SerialName("store_id") val storeId: String,
-    @SerialName("amount_minor") val amountMinor: Long? = null,
-    val currency: String = "INR",
-    val provider: String,
-    @SerialName("product_id") val productId: String? = null,
-    val status: String,
-    val note: String? = null,
+data class AdminCloudAccount(
+    @SerialName("user_id") val userId: String,
+    val email: String,
     @SerialName("created_at") val createdAt: String,
+    val subscriptions: List<AdminSubscription> = emptyList(),
 )
 
 @Serializable
-data class AdminInsights(
-    val total: Int = 0,
-    val active: Int = 0,
-    val held: Int = 0,
-    val pro: Int = 0,
-    val recordedAmountMinor: Long = 0,
-)
+data class AdminOverview(val accounts: List<AdminCloudAccount> = emptyList())
 
 @Serializable
-data class AdminOverview(
-    val stores: List<AdminStore> = emptyList(),
-    val payments: List<AdminPayment> = emptyList(),
-    val insights: AdminInsights = AdminInsights(),
-)
-
-@Serializable
-private data class AdminActionResult(val ok: Boolean = true, val storeId: String? = null)
+private data class AdminActionResult(val ok: Boolean = true)
 
 @Singleton
 class PlatformAdminRepository @Inject constructor(
@@ -73,34 +43,10 @@ class PlatformAdminRepository @Inject constructor(
 
     suspend fun overview(): AdminOverview = call("overview")
 
-    suspend fun createStore(name: String, ownerEmail: String, storeType: String) {
-        call<AdminActionResult>("create_store") {
-            put("name", name)
-            put("ownerEmail", ownerEmail)
-            put("storeType", storeType)
-        }
-    }
-
-    suspend fun updateStore(store: AdminStore, name: String, address: String, phone: String, gstin: String, storeType: String) {
-        call<AdminActionResult>("update_store") {
-            put("storeId", store.storeId)
-            put("name", name)
-            put("address", address)
-            put("phone", phone)
-            put("gstin", gstin)
-            put("storeType", storeType)
-        }
-    }
-
-    suspend fun setStatus(storeId: String, action: String) {
-        call<AdminActionResult>(action) { put("storeId", storeId) }
-    }
-
-    suspend fun recordPayment(storeId: String, amountMinor: Long, note: String) {
-        call<AdminActionResult>("record_payment") {
+    suspend fun setPlan(storeId: String, plan: String) {
+        call<AdminActionResult>("set_plan") {
             put("storeId", storeId)
-            put("amountMinor", amountMinor)
-            put("note", note)
+            put("plan", plan)
         }
     }
 

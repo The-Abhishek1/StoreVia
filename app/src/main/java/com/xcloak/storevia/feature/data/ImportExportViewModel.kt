@@ -11,6 +11,7 @@ import com.xcloak.storevia.core.database.dao.UnitDao
 import com.xcloak.storevia.core.util.Csv
 import com.xcloak.storevia.data.export.CsvExporter
 import com.xcloak.storevia.data.export.ExportKind
+import com.xcloak.storevia.data.cloud.CloudAccountRepository
 import com.xcloak.storevia.domain.imports.*
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -31,6 +32,9 @@ data class DataUi(
     @StringRes val message: Int? = null,
     val messageArgs: List<Any> = emptyList(),
     val pending: PendingImport? = null,
+    val proAccessChecked: Boolean = false,
+    val proAccessEnabled: Boolean = false,
+    val proAccessError: String? = null,
 )
 
 @HiltViewModel
@@ -41,19 +45,25 @@ class ImportExportViewModel @Inject constructor(
     private val unitDao: UnitDao,
     private val access: Access,
     private val audit: AuditSink,
+    private val cloud: CloudAccountRepository,
 ) : ViewModel() {
 
     private val _ui = MutableStateFlow(DataUi())
     val ui: StateFlow<DataUi> = _ui.asStateFlow()
 
+    init { refreshProAccess() }
+
     fun dismissMessage() = _ui.update { it.copy(message = null, messageArgs = emptyList()) }
     fun cancelImport() = _ui.update { it.copy(pending = null) }
     fun setPolicy(p: DuplicatePolicy) = _ui.update { s -> s.copy(pending = s.pending?.copy(policy = p)) }
+
+    fun refreshProAccess() = viewModelScope.launch { checkProAccess() }
 
     fun export(kind: ExportKind, uri: Uri) = viewModelScope.launch {
         if (kind != ExportKind.TEMPLATE && !access.actor().can(Permission.EXPORT_DATA)) {
             _ui.update { it.copy(message = R.string.err_permission_denied) }; return@launch
         }
+        if (kind != ExportKind.TEMPLATE && !checkProAccess()) return@launch
         _ui.update { it.copy(busy = true) }
         val ok = try {
             val text = exporter.build(kind)
@@ -64,6 +74,10 @@ class ImportExportViewModel @Inject constructor(
     }
 
     fun readImport(uri: Uri) = viewModelScope.launch {
+        if (!access.actor().can(Permission.IMPORT_DATA)) {
+            _ui.update { it.copy(message = R.string.err_permission_denied) }; return@launch
+        }
+        if (!checkProAccess()) return@launch
         _ui.update { it.copy(busy = true) }
         val bytes = try {
             withContext(Dispatchers.IO) { context.contentResolver.openInputStream(uri)?.use { readCapped(it) } }
@@ -79,6 +93,13 @@ class ImportExportViewModel @Inject constructor(
     fun confirmImport() {
         val p = _ui.value.pending ?: return
         viewModelScope.launch {
+            if (!access.actor().can(Permission.IMPORT_DATA)) {
+                _ui.update { it.copy(pending = null, message = R.string.err_permission_denied) }; return@launch
+            }
+            if (!checkProAccess()) {
+                _ui.update { it.copy(pending = null) }
+                return@launch
+            }
             _ui.update { it.copy(busy = true, pending = null) }
             try {
                 val s = importer.import(p.parse.rows, p.policy)
@@ -86,6 +107,24 @@ class ImportExportViewModel @Inject constructor(
             } catch (e: PermissionDeniedException) {
                 _ui.update { it.copy(busy = false, message = R.string.err_permission_denied) }
             }
+        }
+    }
+
+    private suspend fun checkProAccess(): Boolean {
+        return try {
+            val plan = cloud.planSnapshot()
+            val enabled = plan?.plan.equals("pro", ignoreCase = true) && plan?.status.equals("active", ignoreCase = true)
+            _ui.update { it.copy(proAccessChecked = true, proAccessEnabled = enabled, proAccessError = null) }
+            enabled
+        } catch (error: Exception) {
+            _ui.update {
+                it.copy(
+                    proAccessChecked = true,
+                    proAccessEnabled = false,
+                    proAccessError = error.message ?: "Could not check Pro access. Sign in and connect your store, then retry.",
+                )
+            }
+            false
         }
     }
 

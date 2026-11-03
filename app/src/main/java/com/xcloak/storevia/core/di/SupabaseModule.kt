@@ -7,6 +7,7 @@ import dagger.hilt.InstallIn
 import dagger.hilt.components.SingletonComponent
 import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.auth.Auth
+import io.github.jan.supabase.auth.FlowType
 import io.github.jan.supabase.createSupabaseClient
 import io.github.jan.supabase.functions.Functions
 import io.github.jan.supabase.postgrest.Postgrest
@@ -26,7 +27,11 @@ object SupabaseModule {
         supabaseUrl = BuildConfig.SUPABASE_URL.ifBlank { "https://example.supabase.co" },
         supabaseKey = BuildConfig.SUPABASE_ANON_KEY.ifBlank { "anon-key-not-set" },
     ) {
-        install(Auth)
+        install(Auth) {
+            scheme = "storevia"
+            host = "auth"
+            flowType = FlowType.PKCE
+        }
         install(Postgrest)
         install(Storage)
         install(Functions)

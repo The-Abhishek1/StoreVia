@@ -2,7 +2,6 @@ package com.xcloak.storevia.feature.admin
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.xcloak.storevia.core.util.Parsing
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -38,33 +37,9 @@ class PlatformAdminViewModel @Inject constructor(
         }
     }
 
-    fun createStore(name: String, ownerEmail: String, storeType: String) = launchAction {
-        repository.createStore(name.trim(), ownerEmail.trim(), storeType)
-        _ui.update { it.copy(message = "Store created and owner invited.") }
-        loadOverview()
-    }
-
-    fun updateStore(store: AdminStore, name: String, address: String, phone: String, gstin: String, storeType: String) = launchAction {
-        repository.updateStore(store, name.trim(), address.trim(), phone.trim(), gstin.trim(), storeType)
-        _ui.update { it.copy(message = "Store details updated.") }
-        loadOverview()
-    }
-
-    fun hold(storeId: String) = changeStatus(storeId, "hold_store")
-    fun restore(storeId: String) = changeStatus(storeId, "restore_store")
-    fun delete(storeId: String) = changeStatus(storeId, "delete_store")
-
-    fun recordPayment(storeId: String, amount: String, note: String) = launchAction {
-        val amountMinor = Parsing.moneyToPaise(amount) ?: error("Enter a valid payment amount.")
-        require(amountMinor > 0) { "Payment amount must be greater than zero." }
-        repository.recordPayment(storeId, amountMinor, note.trim().also { require(it.isNotEmpty()) { "Add a payment note." } })
-        _ui.update { it.copy(message = "Payment record saved.") }
-        loadOverview()
-    }
-
-    private fun changeStatus(storeId: String, action: String) = launchAction {
-        repository.setStatus(storeId, action)
-        _ui.update { it.copy(message = "Store status updated.") }
+    fun setPlan(storeId: String, plan: String) = launchAction {
+        repository.setPlan(storeId, plan)
+        _ui.update { it.copy(message = if (plan == "pro") "Pro access enabled for testing." else "Pro access disabled.") }
         loadOverview()
     }
 

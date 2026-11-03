@@ -300,6 +300,8 @@
     <string name="export_sales">Sales</string>
     <string name="export_customers">Customers and credit</string>
     <string name="import_hint">Fill in the template in Excel or Google Sheets, save as CSV, then choose it here. You see a preview before anything is added.</string>
+    <string name="data_pro_required">Product CSV import and data exports require a connected cloud account with active Pro. Local file backup and restore remain available on Free.</string>
+    <string name="data_pro_checking">Checking cloud account and Pro access…</string>
     <string name="download_template">Download template</string>
     <string name="choose_csv">Choose CSV file</string>
     <string name="export_done">File saved</string>
@@ -537,6 +539,16 @@
     <string name="login_cant_sign_in">Can’t sign in with this account</string>
     <string name="login_locked">Too many wrong PINs. Try again in %1$d s</string>
     <string name="platform_admin_title">Platform admin</string>
+    <string name="platform_admin_accounts_title">Cloud accounts</string>
+    <string name="platform_admin_accounts_hint">Account email, creation date, and subscription status only. Business data is not available here. Pro controls are for testing and do not require Play Console.</string>
+    <string name="platform_admin_no_accounts">No cloud accounts found.</string>
+    <string name="platform_admin_email_unavailable">Email unavailable</string>
+    <string name="platform_admin_account_created">Created %1$s</string>
+    <string name="platform_admin_no_subscriptions">No connected store subscription.</string>
+    <string name="platform_admin_subscription_label">Subscription %1$d</string>
+    <string name="platform_admin_subscription_status">%1$s · %2$s</string>
+    <string name="platform_admin_enable_pro">Enable Pro</string>
+    <string name="platform_admin_disable_pro">Disable Pro</string>
     <string name="platform_admin_overview">Multi-store operations overview</string>
     <string name="platform_admin_add_store">Add store</string>
     <string name="platform_admin_insights">Insights</string>
@@ -587,6 +599,7 @@
     <string name="cloud_mode_sign_up">Sign up</string>
     <string name="cloud_not_configured">Cloud services aren’t configured. Add your Supabase URL and public anon key to local.properties.</string>
     <string name="cloud_confirmation">Account created. Verify your email, then sign in.</string>
+    <string name="cloud_resend_confirmation">Resend confirmation link</string>
     <string name="cloud_connected_as">Cloud account: %1$s</string>
     <string name="cloud_store_binding">Store: %1$s · Role: %2$s</string>
     <string name="cloud_connect">Connect this store and sync</string>
@@ -606,4 +619,23 @@
     <string name="theme_system">System</string>
     <string name="theme_light">Light</string>
     <string name="theme_dark">Dark</string>
+    <string name="entry_welcome_title">Welcome to Storevia</string>
+    <string name="entry_welcome_body">Sign in to manage your business across devices, or continue locally when you are offline.</string>
+    <string name="entry_online_sign_in">Sign in to online account</string>
+    <string name="entry_online_sign_up">Create online account</string>
+    <string name="entry_platform_admin">Platform admin</string>
+    <string name="entry_work_offline">Work offline</string>
+    <string name="entry_admin_work_offline">Continue with offline business account</string>
+    <string name="entry_admin_offline_note">Offline mode opens local business tools only. Platform admin tools require an authorized online account.</string>
+    <string name="entry_offline_note">Local-only mode. Data stays on this device until you connect an account.</string>
+    <string name="entry_store_choice_title">Set up your business</string>
+    <string name="entry_store_choice_body">Create a new store or join one using an invitation sent to this email.</string>
+    <string name="entry_create_store">Create a new store</string>
+    <string name="entry_join_store">Join an invited store</string>
+    <string name="entry_back">Back</string>
+    <string name="entry_local_only_banner">Local-only data · connect an account to sync and back it up</string>
+    <string name="entry_continue_to_cloud">Continue to cloud setup</string>
+    <string name="platform_admin_access_denied">This account is not on the platform administrator allowlist.</string>
+    <string name="cloud_join_store">Join invited store</string>
+    <string name="cloud_create_store">Create this store account</string>
 </resources>

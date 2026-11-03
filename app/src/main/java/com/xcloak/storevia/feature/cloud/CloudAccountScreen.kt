@@ -40,18 +40,31 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xcloak.storevia.R
 
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
-fun CloudAccountScreen(onBack: () -> Unit, onPlatformAdmin: () -> Unit, vm: CloudAccountViewModel = hiltViewModel()) {
+fun CloudAccountScreen(
+    onBack: () -> Unit,
+    onPlatformAdmin: () -> Unit,
+    adminOnly: Boolean = false,
+    onWorkOffline: (() -> Unit)? = null,
+    initialCreateAccount: Boolean = false,
+    joinOnly: Boolean = false,
+    createOnly: Boolean = false,
+    vm: CloudAccountViewModel = hiltViewModel(),
+) {
     val ui by vm.ui.collectAsStateWithLifecycle()
     val settings by vm.settings.collectAsStateWithLifecycle()
     val activity = LocalContext.current as? Activity
     var email by rememberSaveable { mutableStateOf("") }
     var password by rememberSaveable { mutableStateOf("") }
-    var createAccount by rememberSaveable { mutableStateOf(false) }
+    var createAccount by rememberSaveable { mutableStateOf(initialCreateAccount) }
+
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { vm.refreshSession() }
 
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
@@ -69,11 +82,21 @@ fun CloudAccountScreen(onBack: () -> Unit, onPlatformAdmin: () -> Unit, vm: Clou
             Text(stringResource(R.string.cloud_description), style = MaterialTheme.typography.bodyLarge)
             if (!vm.isConfigured) {
                 Text(stringResource(R.string.cloud_not_configured), color = MaterialTheme.colorScheme.error)
+                if (adminOnly && onWorkOffline != null) {
+                    Text(stringResource(R.string.entry_admin_offline_note), style = MaterialTheme.typography.bodySmall)
+                    OutlinedButton(onClick = onWorkOffline, enabled = !ui.busy, modifier = Modifier.fillMaxWidth()) {
+                        Text(stringResource(R.string.entry_admin_work_offline))
+                    }
+                }
             } else if (ui.email == null) {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    androidx.compose.foundation.layout.Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        FilterChip(selected = !createAccount, onClick = { createAccount = false }, label = { Text(stringResource(R.string.cloud_mode_sign_in)) })
-                        FilterChip(selected = createAccount, onClick = { createAccount = true }, label = { Text(stringResource(R.string.cloud_mode_sign_up)) })
+                    if (!adminOnly) {
+                        androidx.compose.foundation.layout.Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilterChip(selected = !createAccount, onClick = { createAccount = false }, label = { Text(stringResource(R.string.cloud_mode_sign_in)) })
+                            FilterChip(selected = createAccount, onClick = { createAccount = true }, label = { Text(stringResource(R.string.cloud_mode_sign_up)) })
+                        }
+                    } else {
+                        Text(stringResource(R.string.entry_admin_offline_note), style = MaterialTheme.typography.bodySmall)
                     }
                     OutlinedTextField(
                         value = email, onValueChange = { email = it }, singleLine = true,
@@ -93,9 +116,31 @@ fun CloudAccountScreen(onBack: () -> Unit, onPlatformAdmin: () -> Unit, vm: Clou
                         enabled = !ui.busy,
                         modifier = Modifier.fillMaxWidth().height(52.dp),
                     ) { Text(stringResource(if (createAccount) R.string.cloud_sign_up else R.string.cloud_sign_in)) }
+                    if (createAccount || ui.awaitingEmailConfirmation) {
+                        OutlinedButton(onClick = { vm.resendConfirmation(email) }, enabled = !ui.busy, modifier = Modifier.fillMaxWidth()) {
+                            Text(stringResource(R.string.cloud_resend_confirmation))
+                        }
+                    }
+                    if (adminOnly && onWorkOffline != null) {
+                        OutlinedButton(onClick = onWorkOffline, enabled = !ui.busy, modifier = Modifier.fillMaxWidth()) {
+                            Text(stringResource(R.string.entry_admin_work_offline))
+                        }
+                    }
                 }
             } else {
                 Text(stringResource(R.string.cloud_connected_as, ui.email.orEmpty()), style = MaterialTheme.typography.titleMedium)
+                if (adminOnly) {
+                    if (ui.platformAdmin) {
+                        Button(onClick = onPlatformAdmin, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+                            Text(stringResource(R.string.platform_admin_title))
+                        }
+                    } else {
+                        Text(stringResource(R.string.platform_admin_access_denied), color = MaterialTheme.colorScheme.error)
+                    }
+                    OutlinedButton(onClick = vm::signOut, enabled = !ui.busy, modifier = Modifier.fillMaxWidth()) {
+                        Text(stringResource(R.string.cloud_sign_out))
+                    }
+                } else {
                 ui.plan?.let { plan ->
                     val planLabel = stringResource(
                         when (plan.plan.lowercase()) {
@@ -125,15 +170,21 @@ fun CloudAccountScreen(onBack: () -> Unit, onPlatformAdmin: () -> Unit, vm: Clou
                         ) { Text(stringResource(R.string.cloud_upgrade_pro)) }
                     }
                 }
-                settings.cloudStoreId?.let { storeId ->
+                val connectedStoreId = settings.cloudStoreId
+                if (connectedStoreId != null && !joinOnly && !createOnly) {
+                    val storeId = connectedStoreId
                     Text(stringResource(R.string.cloud_store_binding, storeId, settings.cloudRole ?: "MEMBER"))
                     Button(onClick = vm::syncNow, enabled = !ui.busy, modifier = Modifier.fillMaxWidth().height(52.dp)) {
                         Text(stringResource(R.string.cloud_sync_now))
                     }
-                } ?: run {
+                } else {
                     Text(stringResource(R.string.cloud_connection_ready), style = MaterialTheme.typography.bodyMedium)
-                    Button(onClick = vm::connect, enabled = !ui.busy, modifier = Modifier.fillMaxWidth().height(52.dp)) {
-                        Text(stringResource(R.string.cloud_connect))
+                    Button(
+                        onClick = { if (joinOnly) vm.joinStore() else vm.connect() },
+                        enabled = !ui.busy,
+                        modifier = Modifier.fillMaxWidth().height(52.dp),
+                    ) {
+                        Text(stringResource(if (joinOnly) R.string.cloud_join_store else if (createOnly) R.string.cloud_create_store else R.string.cloud_connect))
                     }
                 }
                 if (ui.platformAdmin) {
@@ -144,6 +195,7 @@ fun CloudAccountScreen(onBack: () -> Unit, onPlatformAdmin: () -> Unit, vm: Clou
                 HorizontalDivider()
                 OutlinedButton(onClick = vm::signOut, enabled = !ui.busy, modifier = Modifier.fillMaxWidth()) {
                     Text(stringResource(R.string.cloud_sign_out))
+                }
                 }
             }
             if (ui.busy || ui.billingBusy) Text(stringResource(R.string.working), style = MaterialTheme.typography.bodySmall)

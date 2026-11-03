@@ -29,6 +29,9 @@ fun ImportExportScreen(onBack: () -> Unit, vm: ImportExportViewModel = hiltViewM
     var pendingExport by remember { mutableStateOf<ExportKind?>(null) }
     val canImport = can(Permission.IMPORT_DATA)
     val canExport = can(Permission.EXPORT_DATA)
+    val proEnabled = ui.proAccessChecked && ui.proAccessEnabled
+
+    LaunchedEffect(Unit) { vm.refreshProAccess() }
 
     val createLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { uri ->
         val kind = pendingExport
@@ -56,12 +59,19 @@ fun ImportExportScreen(onBack: () -> Unit, vm: ImportExportViewModel = hiltViewM
 
             Text(stringResource(R.string.section_import), style = MaterialTheme.typography.titleMedium)
             Text(stringResource(R.string.import_hint), style = MaterialTheme.typography.bodyMedium)
+            if (!proEnabled) Text(
+                ui.proAccessError ?: stringResource(
+                    if (ui.proAccessChecked) R.string.data_pro_required else R.string.data_pro_checking,
+                ),
+                style = MaterialTheme.typography.bodySmall,
+                color = if (ui.proAccessError != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(
                     onClick = { pendingExport = ExportKind.TEMPLATE; createLauncher.launch(ExportKind.TEMPLATE.fileName) },
                     modifier = Modifier.weight(1f),
                 ) { Text(stringResource(R.string.download_template)) }
-                Button(onClick = { openLauncher.launch(arrayOf("text/*", "application/vnd.ms-excel", "application/octet-stream")) }, enabled = !ui.busy && canImport, modifier = Modifier.weight(1f)) {
+                Button(onClick = { openLauncher.launch(arrayOf("text/*", "application/vnd.ms-excel", "application/octet-stream")) }, enabled = !ui.busy && canImport && proEnabled, modifier = Modifier.weight(1f)) {
                     Text(stringResource(R.string.choose_csv))
                 }
             }
@@ -73,7 +83,7 @@ fun ImportExportScreen(onBack: () -> Unit, vm: ImportExportViewModel = hiltViewM
                     ExportKind.PRODUCTS to R.string.export_products, ExportKind.STOCK to R.string.export_stock,
                     ExportKind.SALES to R.string.export_sales, ExportKind.CUSTOMERS to R.string.export_customers,
                 ).forEach { (kind, label) ->
-                    OutlinedButton(onClick = { pendingExport = kind; createLauncher.launch(kind.fileName) }, enabled = !ui.busy && canExport) { Text(stringResource(label)) }
+                    OutlinedButton(onClick = { pendingExport = kind; createLauncher.launch(kind.fileName) }, enabled = !ui.busy && canExport && proEnabled) { Text(stringResource(label)) }
                 }
             }
         }
