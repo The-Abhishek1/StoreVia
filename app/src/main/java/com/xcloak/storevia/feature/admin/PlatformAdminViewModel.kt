@@ -14,6 +14,7 @@ data class PlatformAdminUiState(
     val overview: AdminOverview? = null,
     val busy: Boolean = false,
     val accessDenied: Boolean = false,
+    val serviceUpdateRequired: Boolean = false,
     val message: String? = null,
 )
 
@@ -48,7 +49,11 @@ class PlatformAdminViewModel @Inject constructor(
         try {
             block()
         } catch (error: Exception) {
-            _ui.update { it.copy(busy = false, message = error.message ?: "Platform admin request failed.") }
+            if (error is PlatformAdminServiceUpdateRequiredException) {
+                _ui.update { it.copy(busy = false, serviceUpdateRequired = true, message = null) }
+            } else {
+                _ui.update { it.copy(busy = false, message = error.message ?: "Platform admin request failed.") }
+            }
         } finally {
             _ui.update { it.copy(busy = false) }
         }

@@ -127,6 +127,16 @@ fun PlatformAdminScreen(onBack: () -> Unit, vm: PlatformAdminViewModel = hiltVie
                         )
                     }
                 }
+            } else if (ui.serviceUpdateRequired) {
+                item {
+                    Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
+                        Text(
+                            stringResource(R.string.platform_admin_service_update_required),
+                            Modifier.fillMaxWidth().padding(16.dp),
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                        )
+                    }
+                }
             } else if (ui.overview != null) {
                 item {
                     Card(

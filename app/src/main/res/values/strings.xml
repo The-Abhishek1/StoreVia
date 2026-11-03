@@ -550,6 +550,7 @@
     <string name="platform_admin_no_accounts">No cloud accounts found.</string>
     <string name="platform_admin_console_subtitle">Cloud accounts and plan controls</string>
     <string name="platform_admin_refresh">Refresh account list</string>
+    <string name="platform_admin_service_update_required">The platform admin service is outdated and didn’t return the account list. Deploy the latest platform-admin Edge Function in Supabase, then refresh.</string>
     <string name="platform_admin_metric_accounts">Accounts</string>
     <string name="platform_admin_metric_pro">Pro accounts</string>
     <string name="platform_admin_metric_free">Free accounts</string>

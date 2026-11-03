@@ -4,6 +4,10 @@ import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.functions.functions
 import io.ktor.client.call.body
 import com.xcloak.storevia.data.cloud.CloudAccountRepository
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.decodeFromJsonElement
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonObjectBuilder
@@ -31,6 +35,8 @@ data class AdminCloudAccount(
 @Serializable
 data class AdminOverview(val accounts: List<AdminCloudAccount>)
 
+class PlatformAdminServiceUpdateRequiredException : Exception()
+
 @Serializable
 private data class AdminActionResult(val ok: Boolean = true)
 
@@ -39,9 +45,15 @@ class PlatformAdminRepository @Inject constructor(
     private val client: SupabaseClient,
     private val account: CloudAccountRepository,
 ) {
+    private val json = Json { ignoreUnknownKeys = true }
+
     suspend fun hasAccess() = account.isPlatformAdmin()
 
-    suspend fun overview(): AdminOverview = call("overview")
+    suspend fun overview(): AdminOverview {
+        val response = call<JsonObject>("overview")
+        if (response["accounts"] !is JsonArray) throw PlatformAdminServiceUpdateRequiredException()
+        return json.decodeFromJsonElement(response)
+    }
 
     suspend fun setPlan(storeId: String, plan: String) {
         call<AdminActionResult>("set_plan") {
