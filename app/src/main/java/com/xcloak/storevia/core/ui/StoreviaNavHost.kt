@@ -7,6 +7,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -107,6 +108,7 @@ private enum class Tab(val route: String, val label: Int, val icon: ImageVector)
 }
 
 @Composable
+@OptIn(ExperimentalMaterial3Api::class)
 fun StoreviaNavHost(localOnly: Boolean = false) {
     val nav = rememberNavController()
     val current by nav.currentBackStackEntryAsState()
@@ -117,11 +119,28 @@ fun StoreviaNavHost(localOnly: Boolean = false) {
 
     Scaffold(
         topBar = {
-            if (localOnly) {
-                Surface(color = MaterialTheme.colorScheme.tertiaryContainer) {
-                    Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(stringResource(R.string.entry_local_only_banner), Modifier.weight(1f), style = MaterialTheme.typography.labelMedium)
-                        TextButton(onClick = { nav.navigate(Routes.CLOUD_ACCOUNT) }) { Text(stringResource(R.string.cloud_connect)) }
+            Column {
+                if (showBottomBar) {
+                    TopAppBar(title = { Text(stringResource(rootTitle(route))) })
+                }
+                if (localOnly) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        modifier = Modifier.fillMaxWidth().then(if (showBottomBar) Modifier else Modifier.statusBarsPadding()),
+                    ) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(Icons.Filled.CloudOff, contentDescription = null, tint = MaterialTheme.colorScheme.onSecondaryContainer)
+                            Text(
+                                stringResource(R.string.entry_local_only_banner),
+                                Modifier.weight(1f).padding(start = 10.dp),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            )
+                            TextButton(onClick = { nav.navigate(Routes.CLOUD_ACCOUNT) }) { Text(stringResource(R.string.cloud_connect)) }
+                        }
                     }
                 }
             }
@@ -144,7 +163,12 @@ fun StoreviaNavHost(localOnly: Boolean = false) {
             }
         },
     ) { padding ->
-        NavHost(nav, startDestination = Routes.HOME, modifier = Modifier.padding(padding).statusBarsPadding()) {
+        NavHost(
+            nav,
+            startDestination = Routes.HOME,
+            modifier = Modifier.padding(padding).consumeWindowInsets(padding)
+                .then(if (showBottomBar || localOnly) Modifier else Modifier.statusBarsPadding()),
+        ) {
             composable(Routes.HOME) {
                 HomeScreen(
                     onNewSale = { nav.navigate(Routes.CHECKOUT) },
@@ -302,3 +326,10 @@ fun StoreviaNavHost(localOnly: Boolean = false) {
     }
 }
 
+private fun rootTitle(route: String?): Int = when (route) {
+    Routes.STOCK -> R.string.nav_stock
+    Routes.SALES -> R.string.nav_sales
+    Routes.REPORTS -> R.string.nav_reports
+    Routes.MORE -> R.string.nav_more
+    else -> R.string.nav_home
+}

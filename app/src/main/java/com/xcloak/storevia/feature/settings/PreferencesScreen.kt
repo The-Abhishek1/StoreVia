@@ -54,61 +54,73 @@ fun PreferencesScreen(onBack: () -> Unit, vm: PreferencesViewModel = hiltViewMod
             )
         },
     ) { padding ->
-        Column(Modifier.padding(padding).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(stringResource(R.string.appearance_title), style = MaterialTheme.typography.titleMedium)
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                ThemeMode.entries.forEach { mode ->
-                    FilterChip(
-                        selected = s.themeMode == mode,
-                        onClick = { vm.setThemeMode(mode) },
-                        label = { Text(stringResource(when (mode) {
-                            ThemeMode.SYSTEM -> R.string.theme_system
-                            ThemeMode.LIGHT -> R.string.theme_light
-                            ThemeMode.DARK -> R.string.theme_dark
-                        })) },
-                    )
-                }
-            }
-            HorizontalDivider(Modifier.padding(vertical = 4.dp))
-            Text(stringResource(R.string.section_alerts), style = MaterialTheme.typography.titleMedium)
-            SwitchRow(stringResource(R.string.alerts_switch), stringResource(R.string.alerts_switch_hint), s.alertsEnabled) { on ->
-                vm.setAlerts(on)
-                if (on && Build.VERSION.SDK_INT >= 33 && !notificationsOn) permission.launch(Manifest.permission.POST_NOTIFICATIONS)
-            }
-            if (s.alertsEnabled && !notificationsOn) Text(stringResource(R.string.alerts_blocked), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-            if (s.alertsEnabled) {
-                Text(stringResource(R.string.warn_days_label), style = MaterialTheme.typography.labelLarge)
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf(7, 15, 30, 60).forEach { d ->
-                        FilterChip(s.expiryWarnDays == d, { vm.setExpiryDays(d) }, { Text(stringResource(R.string.days_chip, d)) })
+        Column(Modifier.padding(padding).verticalScroll(rememberScrollState()).padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Text(stringResource(R.string.prefs_intro), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(stringResource(R.string.appearance_title), style = MaterialTheme.typography.titleMedium)
+                    Text(stringResource(R.string.appearance_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ThemeMode.entries.forEach { mode ->
+                            FilterChip(
+                                selected = s.themeMode == mode,
+                                onClick = { vm.setThemeMode(mode) },
+                                label = { Text(stringResource(when (mode) {
+                                    ThemeMode.SYSTEM -> R.string.theme_system
+                                    ThemeMode.LIGHT -> R.string.theme_light
+                                    ThemeMode.DARK -> R.string.theme_dark
+                                })) },
+                            )
+                        }
                     }
                 }
-                Text(stringResource(R.string.alert_time_label), style = MaterialTheme.typography.labelLarge)
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf(8, 9, 12, 18).forEach { h ->
-                        FilterChip(s.alertHour == h, { vm.setAlertHour(h) }, { Text(hourLabel(h)) })
+            }
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(stringResource(R.string.section_alerts), style = MaterialTheme.typography.titleMedium)
+                    SwitchRow(stringResource(R.string.alerts_switch), stringResource(R.string.alerts_switch_hint), s.alertsEnabled) { on ->
+                        vm.setAlerts(on)
+                        if (on && Build.VERSION.SDK_INT >= 33 && !notificationsOn) permission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                    if (s.alertsEnabled && !notificationsOn) Text(stringResource(R.string.alerts_blocked), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    if (s.alertsEnabled) {
+                        Text(stringResource(R.string.warn_days_label), style = MaterialTheme.typography.labelLarge)
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            listOf(7, 15, 30, 60).forEach { d ->
+                                FilterChip(s.expiryWarnDays == d, { vm.setExpiryDays(d) }, { Text(stringResource(R.string.days_chip, d)) })
+                            }
+                        }
+                        Text(stringResource(R.string.alert_time_label), style = MaterialTheme.typography.labelLarge)
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            listOf(8, 9, 12, 18).forEach { h ->
+                                FilterChip(s.alertHour == h, { vm.setAlertHour(h) }, { Text(hourLabel(h)) })
+                            }
+                        }
+                        OutlinedButton(onClick = { vm.sendTestAlert(); sendTest = true }, enabled = notificationsOn) { Text(stringResource(R.string.send_test_alert)) }
                     }
                 }
-                OutlinedButton(onClick = { vm.sendTestAlert(); sendTest = true }, enabled = notificationsOn) { Text(stringResource(R.string.send_test_alert)) }
             }
 
-            HorizontalDivider(Modifier.padding(vertical = 4.dp))
-            Text(stringResource(R.string.section_security), style = MaterialTheme.typography.titleMedium)
-            SwitchRow(stringResource(R.string.lock_switch), stringResource(R.string.lock_switch_hint), s.lockEnabled) { on ->
-                if (!on) { vm.setLock(false); needScreenLock = false }
-                else {
-                    val intent = DeviceAuth.confirmIntent(context, lockPrompt, null)
-                    if (intent == null) needScreenLock = true else { needScreenLock = false; confirmLock.launch(intent) }
-                }
-            }
-            if (needScreenLock) Text(stringResource(R.string.lock_needs_screen_lock), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
-            if (s.lockEnabled) {
-                Text(stringResource(R.string.lock_after_label), style = MaterialTheme.typography.labelLarge)
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf(10, 60, 300, 900).forEach { sec ->
-                        FilterChip(s.lockGraceSeconds == sec, { vm.setLockGrace(sec) }, {
-                            Text(if (sec < 60) stringResource(R.string.seconds_chip, sec) else stringResource(R.string.minutes_chip, sec / 60))
-                        })
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(stringResource(R.string.section_security), style = MaterialTheme.typography.titleMedium)
+                    SwitchRow(stringResource(R.string.lock_switch), stringResource(R.string.lock_switch_hint), s.lockEnabled) { on ->
+                        if (!on) { vm.setLock(false); needScreenLock = false }
+                        else {
+                            val intent = DeviceAuth.confirmIntent(context, lockPrompt, null)
+                            if (intent == null) needScreenLock = true else { needScreenLock = false; confirmLock.launch(intent) }
+                        }
+                    }
+                    if (needScreenLock) Text(stringResource(R.string.lock_needs_screen_lock), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                    if (s.lockEnabled) {
+                        Text(stringResource(R.string.lock_after_label), style = MaterialTheme.typography.labelLarge)
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            listOf(10, 60, 300, 900).forEach { sec ->
+                                FilterChip(s.lockGraceSeconds == sec, { vm.setLockGrace(sec) }, {
+                                    Text(if (sec < 60) stringResource(R.string.seconds_chip, sec) else stringResource(R.string.minutes_chip, sec / 60))
+                                })
+                            }
+                        }
                     }
                 }
             }
@@ -124,7 +136,7 @@ private fun hourLabel(hour: Int): String {
 
 @Composable
 private fun SwitchRow(title: String, hint: String, checked: Boolean, onChange: (Boolean) -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.weight(1f).padding(end = 12.dp)) {
             Text(title, style = MaterialTheme.typography.bodyLarge)
             Text(hint, style = MaterialTheme.typography.bodySmall)

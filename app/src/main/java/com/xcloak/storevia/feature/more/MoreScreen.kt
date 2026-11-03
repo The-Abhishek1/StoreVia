@@ -1,10 +1,15 @@
 package com.xcloak.storevia.feature.more
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -12,6 +17,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xcloak.storevia.R
@@ -48,22 +54,30 @@ fun MoreScreen(
         MenuItem(Icons.Filled.Cloud, R.string.more_cloud_account, R.string.more_cloud_account_hint, { true }, onCloudAccount),
     ).filter { it.allowed(actor.permissions) }
 
-    Column(Modifier.verticalScroll(rememberScrollState())) {
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(stringResource(R.string.more_screen_title), style = MaterialTheme.typography.titleLarge)
+        Text(stringResource(R.string.more_screen_hint), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         if (staffMode) {
-            ListItem(
-                headlineContent = { Text(stringResource(R.string.signed_in_as, actor.name, roleLabel(actor.role))) },
-                trailingContent = { TextButton(onClick = access::switchUser) { Text(stringResource(R.string.switch_user)) } },
-            )
-            HorizontalDivider()
+            Card(Modifier.fillMaxWidth()) {
+                ListItem(
+                    headlineContent = { Text(stringResource(R.string.signed_in_as, actor.name, roleLabel(actor.role))) },
+                    trailingContent = { TextButton(onClick = access::switchUser) { Text(stringResource(R.string.switch_user)) } },
+                )
+            }
         }
         items.forEach { m ->
-            ListItem(
-                modifier = Modifier.clickable(onClick = m.onClick),
-                leadingContent = { Icon(m.icon, contentDescription = null) },
-                headlineContent = { Text(stringResource(m.title)) },
-                supportingContent = { Text(stringResource(m.hint)) },
-            )
-            HorizontalDivider()
+            Card(Modifier.fillMaxWidth().clickable(onClick = m.onClick)) {
+                ListItem(
+                    leadingContent = { Icon(m.icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },
+                    headlineContent = { Text(stringResource(m.title), style = MaterialTheme.typography.titleSmall) },
+                    supportingContent = { Text(stringResource(m.hint), style = MaterialTheme.typography.bodySmall) },
+                    trailingContent = { Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
+                    colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surface),
+                )
+            }
         }
     }
 }

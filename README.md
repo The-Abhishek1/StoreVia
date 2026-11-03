@@ -10,6 +10,7 @@ Android inventory, sales, expiry and khata app for small retailers. Kotlin, Jetp
 5. Supabase: run `supabase/schema.sql` in the SQL editor. Enable email/password sign-up and confirm email in Auth settings. Add `storevia://auth/callback` to Authentication -> URL Configuration -> Redirect URLs. Signup uses PKCE and returns confirmation callbacks to this Android deep link; the Cloud account screen can resend an expired confirmation. The script creates the private backup bucket and its row-level policies.
 
 ## Architecture rules
+- UI typography uses the bundled Roboto face to remain consistent across Android OEM font settings. Roboto is licensed under Apache-2.0; see `app/src/main/assets/Roboto-LICENSE.txt`.
 - Money = Long paise. Quantity = Long thousandths. Never floating point.
 - Stock ledger (`stock_movements`) is the source of truth; `batches.qtyOnHandMilli` is a cached balance.
 - A sale is one DB transaction (`CompleteSaleUseCase`). Invoices store snapshots and are never edited.
@@ -33,7 +34,7 @@ every schema change needs a Room migration and a migration test.
 - Each phone gets its own invoice series (INV-00001, then INV-B-00001 on a second phone) so numbers never clash.
 - `supabase/schema.sql` is generated: run `python3 supabase/generate_schema.py` after changing an entity or `SyncTables.kt`.
 - More -> Cloud account provides email sign-up/sign-in, first-store cloud setup, account/role/plan status, manual sync, and sign-out.
-- Startup offers separate online sign-in and account creation choices, platform-admin sign-in, and local-only mode. The platform-admin sign-in screen also offers the local-only business app; this does not grant offline access to platform-admin tools, which remain restricted to authorized online accounts. Returning authenticated stores go directly to the dashboard. Work offline is an explicit local-only fallback with a persistent Connect account action; signing in there routes normal users to store setup/join and allowlisted admins to the admin portal.
+- Startup offers separate online sign-in and account creation choices, platform-admin sign-in, and local-only mode. Returning authenticated stores go directly to the dashboard. Work offline is an explicit local-only fallback with a persistent Connect account action; signing in there routes normal users to store setup/join and allowlisted admins to the admin portal.
 - After a successful connection, WorkManager runs sync every 15 minutes when the network is available. Signing out cancels scheduled sync.
 - A fresh phone can join an existing cloud store when it is still at untouched first-run setup; the app makes a local safety backup before replacing placeholder data. Connecting a populated phone to a different store is rejected without changing local data.
 - Backup and restore includes an encrypted cloud backup in the private `storevia-backups` bucket. Cloud upload requires a passphrase; restore still validates the archive and asks for final confirmation before replacing local data.
@@ -46,7 +47,7 @@ every schema change needs a Room migration and a migration test.
 1. Create a subscription product in Play Console. Set `play.proProductId` in `local.properties` to its product ID; the default is `storevia_pro_monthly`.
 2. Link a Google Play Developer API service account with permission to view financial data and manage orders/subscriptions. Enable the Android Publisher API for its Google Cloud project.
 3. Configure Supabase Edge Function secrets: `PLAY_PACKAGE_NAME=com.xcloak.storevia`, `PLAY_PRO_PRODUCT_ID` to the exact Play product ID, and `GOOGLE_PLAY_SERVICE_ACCOUNT_JSON` to the service-account JSON. Never put this JSON in the Android app or `local.properties`.
-4. Deploy `supabase/functions/verify-play-purchase` and `supabase/functions/platform-admin` with `supabase functions deploy`.
+4. Deploy `supabase/functions/verify-play-purchase` and `supabase/functions/platform-admin` with `supabase functions deploy`. Redeploy `platform-admin` after changes to its account overview so the admin app reads current cloud memberships.
 5. After the first platform-admin user signs up and verifies their email, add that Auth user to the allowlist from the Supabase SQL editor: `insert into public.platform_admins (user_id) select id from auth.users where lower(email) = lower('admin@example.com');`. No mobile client can modify this allowlist.
 6. Re-run `supabase/schema.sql` after pulling schema changes, then use a Play internal-test track to exercise purchases. Local APK sideloads do not provide real Play purchase eligibility.
 

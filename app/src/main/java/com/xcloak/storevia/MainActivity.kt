@@ -163,9 +163,6 @@ class MainActivity : ComponentActivity() {
                                     onBack = { entryRoute = EntryRoute.WELCOME },
                                     onPlatformAdmin = { entryRoute = EntryRoute.ADMIN_PORTAL },
                                     adminOnly = entryRoute == EntryRoute.ADMIN_AUTH,
-                                    onWorkOffline = if (entryRoute == EntryRoute.ADMIN_AUTH) {
-                                        { prefs.update { copy(localOnlyMode = true) } }
-                                    } else null,
                                     initialCreateAccount = entryRoute == EntryRoute.BUSINESS_SIGN_UP,
                                 )
                             }

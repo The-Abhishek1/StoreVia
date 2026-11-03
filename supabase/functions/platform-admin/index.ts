@@ -29,13 +29,27 @@ Deno.serve(async (request) => {
       }
 
       const memberships: { user_id: string; store_id: string }[] = [];
-      for (let offset = 0; offset < users.length; offset += 500) {
-        const ids = users.slice(offset, offset + 500).map((account) => account.id);
-        if (ids.length === 0) continue;
-        const { data, error } = await service.from("store_members").select("user_id,store_id").in("user_id", ids);
+      for (let offset = 0; ; offset += 1000) {
+        const { data, error } = await service.from("store_members")
+          .select("user_id,store_id")
+          .order("user_id")
+          .order("store_id")
+          .range(offset, offset + 999);
         if (error) throw error;
         memberships.push(...(data ?? []));
+        if (!data || data.length < 1000) break;
       }
+
+      const usersById = new Map(users.map((account) => [account.id, account]));
+      const missingUserIds = [...new Set(memberships.map((member) => member.user_id))]
+        .filter((userId) => !usersById.has(userId));
+      for (const userId of missingUserIds) {
+        const { data, error } = await service.auth.admin.getUserById(userId);
+        if (error) throw error;
+        if (!data.user) throw new Error("Store membership references an unknown cloud account.");
+        usersById.set(data.user.id, data.user);
+      }
+
       const storeIds = [...new Set(memberships.map((member) => member.store_id))];
       const subscriptions = new Map<string, AccountSubscription>();
       for (let offset = 0; offset < storeIds.length; offset += 500) {
@@ -53,7 +67,7 @@ Deno.serve(async (request) => {
         storesByUser.set(membership.user_id, accountStores);
       }
       return json({
-        accounts: users.map((account) => ({
+        accounts: [...usersById.values()].map((account) => ({
           user_id: account.id,
           email: account.email ?? "",
           created_at: account.created_at,

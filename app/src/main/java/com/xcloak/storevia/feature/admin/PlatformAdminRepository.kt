@@ -29,7 +29,7 @@ data class AdminCloudAccount(
 )
 
 @Serializable
-data class AdminOverview(val accounts: List<AdminCloudAccount> = emptyList())
+data class AdminOverview(val accounts: List<AdminCloudAccount>)
 
 @Serializable
 private data class AdminActionResult(val ok: Boolean = true)

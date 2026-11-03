@@ -32,10 +32,15 @@ fun ReportsScreen(vm: ReportsViewModel = hiltViewModel()) {
             }
         }
         item {
-            Column {
-                Text(stringResource(R.string.net_sales), style = MaterialTheme.typography.labelLarge)
-                Text(Money(s.netPaise).format(), style = MaterialTheme.typography.displaySmall)
-                Text(stringResource(R.string.net_sales_hint), style = MaterialTheme.typography.bodySmall)
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+            ) {
+                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(stringResource(R.string.net_sales), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                    Text(Money(s.netPaise).format(), style = MaterialTheme.typography.headlineLarge, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                    Text(stringResource(R.string.net_sales_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                }
             }
         }
         item {
@@ -108,33 +113,34 @@ private fun methodLabel(m: PaymentMethod) = when (m) {
 
 @Composable
 private fun Section(title: Int) {
-    Column {
-        HorizontalDivider(Modifier.padding(bottom = 12.dp))
-        Text(stringResource(title), style = MaterialTheme.typography.titleMedium)
-    }
+    Text(stringResource(title), style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
 }
 
 @Composable
 private fun Line(label: String, value: String) {
-    Row(Modifier.fillMaxWidth()) {
-        Text(label, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-        Text(value, style = MaterialTheme.typography.titleSmall)
+    Card(Modifier.fillMaxWidth()) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(label, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+            Text(value, style = MaterialTheme.typography.titleSmall)
+        }
     }
 }
 
 @Composable
 private fun ExpiryLine(label: Int, agg: BatchAgg) {
-    Column {
-        Text(stringResource(label), style = MaterialTheme.typography.bodyMedium)
-        Text(stringResource(R.string.batches_value, agg.batches, Money(agg.costPaise).format()), style = MaterialTheme.typography.titleSmall)
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(stringResource(label), style = MaterialTheme.typography.bodyMedium)
+            Text(stringResource(R.string.batches_value, agg.batches, Money(agg.costPaise).format()), style = MaterialTheme.typography.titleSmall)
+        }
     }
 }
 
 @Composable
 private fun Stat(label: String, value: String, modifier: Modifier = Modifier) {
-    OutlinedCard(modifier) {
-        Column(Modifier.padding(12.dp)) {
-            Text(label, style = MaterialTheme.typography.labelMedium)
+    Card(modifier, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+        Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(label, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(value, style = MaterialTheme.typography.titleLarge)
         }
     }

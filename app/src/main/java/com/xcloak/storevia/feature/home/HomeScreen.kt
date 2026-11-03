@@ -22,9 +22,9 @@ fun HomeScreen(onNewSale: () -> Unit, onSetupStore: () -> Unit, onOnboarding: ()
     val needsOnboarding by vm.needsOnboarding.collectAsStateWithLifecycle()
     LaunchedEffect(needsOnboarding) { if (needsOnboarding) onOnboarding() }
 
-    Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+    Column(Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         if (needsSetup && can(Permission.MANAGE_SETTINGS)) {
-            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer)) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(stringResource(R.string.finish_setup_title), style = MaterialTheme.typography.titleMedium)
                     Text(stringResource(R.string.finish_setup_body), style = MaterialTheme.typography.bodyMedium)
@@ -32,9 +32,17 @@ fun HomeScreen(onNewSale: () -> Unit, onSetupStore: () -> Unit, onOnboarding: ()
                 }
             }
         }
-        Text(stringResource(R.string.today_sales), style = MaterialTheme.typography.titleMedium)
-        Text(Money(s.todaySalesPaise).format(), style = MaterialTheme.typography.displaySmall)
-        Text("${s.todayCount} bills", style = MaterialTheme.typography.bodyMedium)
+        Text(stringResource(R.string.dashboard_overview), style = MaterialTheme.typography.titleMedium)
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+        ) {
+            Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(stringResource(R.string.today_sales), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                Text(Money(s.todaySalesPaise).format(), style = MaterialTheme.typography.headlineLarge, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                Text(stringResource(R.string.dashboard_bill_count, s.todayCount), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
+            }
+        }
 
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Stat(stringResource(R.string.products_in_stock), s.productCount.toString(), Modifier.weight(1f))
@@ -54,10 +62,10 @@ fun HomeScreen(onNewSale: () -> Unit, onSetupStore: () -> Unit, onOnboarding: ()
 
 @Composable
 private fun Stat(label: String, value: String, modifier: Modifier = Modifier) {
-    OutlinedCard(modifier) {
-        Column(Modifier.padding(16.dp)) {
-            Text(label, style = MaterialTheme.typography.labelLarge)
-            Text(value, style = MaterialTheme.typography.headlineMedium)
+    Card(modifier, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(label, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(value, style = MaterialTheme.typography.headlineSmall)
         }
     }
 }

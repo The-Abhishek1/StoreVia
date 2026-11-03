@@ -38,33 +38,46 @@ fun StoreSettingsScreen(onBack: () -> Unit, vm: StoreSettingsViewModel = hiltVie
         )
         if (!ui.loaded) return@Column
 
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(stringResource(R.string.store_settings_hint), style = MaterialTheme.typography.bodyMedium)
-            Text(stringResource(R.string.section_business), style = MaterialTheme.typography.titleSmall)
-            Field(f.name, { v -> vm.update { copy(name = v) } }, R.string.field_store_name, errText(ui.errors["name"]))
-            Field(f.address, { v -> vm.update { copy(address = v) } }, R.string.field_address)
-            Field(f.phone, { v -> vm.update { copy(phone = v) } }, R.string.field_phone_plain, keyboard = KeyboardType.Phone)
-
-            Text(stringResource(R.string.section_gst), style = MaterialTheme.typography.titleSmall)
-            StateDropdown(f.stateCode) { code -> vm.update { copy(stateCode = code) } }
-            Field(f.gstin, { v -> vm.update { copy(gstin = v.uppercase()) } }, R.string.field_gstin, errText(ui.errors["gstin"]), capitalize = true)
-            Text(stringResource(R.string.gstin_hint), style = MaterialTheme.typography.bodySmall)
-
-            Text(stringResource(R.string.section_billing), style = MaterialTheme.typography.titleSmall)
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Box(Modifier.weight(1f)) { Field(f.invoicePrefix, { v -> vm.update { copy(invoicePrefix = v) } }, R.string.field_invoice_prefix, errText(ui.errors["prefix"]), capitalize = true) }
-                Box(Modifier.weight(1f)) { Field(f.nextInvoiceNo, { v -> vm.update { copy(nextInvoiceNo = v) } }, R.string.field_next_invoice, errText(ui.errors["next"]), KeyboardType.Number) }
-            }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(stringResource(R.string.field_allow_negative))
-                    Text(stringResource(R.string.allow_negative_hint), style = MaterialTheme.typography.bodySmall)
+        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+            Text(stringResource(R.string.store_settings_hint), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(stringResource(R.string.section_business), style = MaterialTheme.typography.titleMedium)
+                    Field(f.name, { v -> vm.update { copy(name = v) } }, R.string.field_store_name, errText(ui.errors["name"]))
+                    Field(f.address, { v -> vm.update { copy(address = v) } }, R.string.field_address)
+                    Field(f.phone, { v -> vm.update { copy(phone = v) } }, R.string.field_phone_plain, keyboard = KeyboardType.Phone)
                 }
-                Switch(checked = f.allowNegativeStock, onCheckedChange = { v -> vm.update { copy(allowNegativeStock = v) } })
             }
-            Spacer(Modifier.height(8.dp))
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(stringResource(R.string.section_gst), style = MaterialTheme.typography.titleMedium)
+                    StateDropdown(f.stateCode) { code -> vm.update { copy(stateCode = code) } }
+                    Field(f.gstin, { v -> vm.update { copy(gstin = v.uppercase()) } }, R.string.field_gstin, errText(ui.errors["gstin"]), capitalize = true)
+                    Text(stringResource(R.string.gstin_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text(stringResource(R.string.section_billing), style = MaterialTheme.typography.titleMedium)
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Box(Modifier.weight(1f)) { Field(f.invoicePrefix, { v -> vm.update { copy(invoicePrefix = v) } }, R.string.field_invoice_prefix, errText(ui.errors["prefix"]), capitalize = true) }
+                        Box(Modifier.weight(1f)) { Field(f.nextInvoiceNo, { v -> vm.update { copy(nextInvoiceNo = v) } }, R.string.field_next_invoice, errText(ui.errors["next"]), KeyboardType.Number) }
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+                        Column(Modifier.weight(1f).padding(end = 16.dp)) {
+                            Text(stringResource(R.string.field_allow_negative), style = MaterialTheme.typography.bodyLarge)
+                            Text(stringResource(R.string.allow_negative_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Switch(checked = f.allowNegativeStock, onCheckedChange = { v -> vm.update { copy(allowNegativeStock = v) } })
+                    }
+                }
+            }
         }
-        Button(onClick = vm::save, modifier = Modifier.fillMaxWidth().padding(16.dp).height(52.dp)) { Text(stringResource(R.string.save)) }
+        Surface(shadowElevation = 6.dp, color = MaterialTheme.colorScheme.surface) {
+            Button(onClick = vm::save, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp).height(52.dp)) {
+                Text(stringResource(R.string.save))
+            }
+        }
     }
 }
 

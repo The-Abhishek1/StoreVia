@@ -51,7 +51,6 @@ fun CloudAccountScreen(
     onBack: () -> Unit,
     onPlatformAdmin: () -> Unit,
     adminOnly: Boolean = false,
-    onWorkOffline: (() -> Unit)? = null,
     initialCreateAccount: Boolean = false,
     joinOnly: Boolean = false,
     createOnly: Boolean = false,
@@ -82,12 +81,6 @@ fun CloudAccountScreen(
             Text(stringResource(R.string.cloud_description), style = MaterialTheme.typography.bodyLarge)
             if (!vm.isConfigured) {
                 Text(stringResource(R.string.cloud_not_configured), color = MaterialTheme.colorScheme.error)
-                if (adminOnly && onWorkOffline != null) {
-                    Text(stringResource(R.string.entry_admin_offline_note), style = MaterialTheme.typography.bodySmall)
-                    OutlinedButton(onClick = onWorkOffline, enabled = !ui.busy, modifier = Modifier.fillMaxWidth()) {
-                        Text(stringResource(R.string.entry_admin_work_offline))
-                    }
-                }
             } else if (ui.email == null) {
                 Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     if (!adminOnly) {
@@ -95,8 +88,6 @@ fun CloudAccountScreen(
                             FilterChip(selected = !createAccount, onClick = { createAccount = false }, label = { Text(stringResource(R.string.cloud_mode_sign_in)) })
                             FilterChip(selected = createAccount, onClick = { createAccount = true }, label = { Text(stringResource(R.string.cloud_mode_sign_up)) })
                         }
-                    } else {
-                        Text(stringResource(R.string.entry_admin_offline_note), style = MaterialTheme.typography.bodySmall)
                     }
                     OutlinedTextField(
                         value = email, onValueChange = { email = it }, singleLine = true,
@@ -119,11 +110,6 @@ fun CloudAccountScreen(
                     if (createAccount || ui.awaitingEmailConfirmation) {
                         OutlinedButton(onClick = { vm.resendConfirmation(email) }, enabled = !ui.busy, modifier = Modifier.fillMaxWidth()) {
                             Text(stringResource(R.string.cloud_resend_confirmation))
-                        }
-                    }
-                    if (adminOnly && onWorkOffline != null) {
-                        OutlinedButton(onClick = onWorkOffline, enabled = !ui.busy, modifier = Modifier.fillMaxWidth()) {
-                            Text(stringResource(R.string.entry_admin_work_offline))
                         }
                     }
                 }

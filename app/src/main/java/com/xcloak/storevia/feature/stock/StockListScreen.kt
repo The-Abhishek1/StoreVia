@@ -6,6 +6,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Inventory2
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -68,7 +69,10 @@ fun StockListScreen(
             when {
                 list == null -> Unit
                 list.isEmpty() -> EmptyState(query.trim(), can(Permission.MANAGE_PRODUCTS), onAddWithBarcode)
-                else -> LazyColumn(contentPadding = PaddingValues(bottom = 96.dp)) {
+                else -> LazyColumn(
+                    contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 112.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                     items(list, key = { it.id }) { row -> ProductRow(row) { onOpen(row.id) } }
                 }
             }
@@ -78,28 +82,29 @@ fun StockListScreen(
 
 @Composable
 private fun ProductRow(row: ProductListRow, onClick: () -> Unit) {
-    ListItem(
-        modifier = Modifier.clickable(onClick = onClick),
-        headlineContent = { Text(row.name, style = MaterialTheme.typography.titleMedium) },
-        supportingContent = {
-            Text(
-                stringResource(
-                    R.string.in_stock_line,
-                    Money(row.sellPricePaise).format(),
-                    Parsing.milliToInput(row.onHandMilli),
-                    row.unitSymbol,
+    Card(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
+        ListItem(
+            headlineContent = { Text(row.name, style = MaterialTheme.typography.titleMedium) },
+            supportingContent = {
+                Text(
+                    stringResource(
+                        R.string.in_stock_line,
+                        Money(row.sellPricePaise).format(),
+                        Parsing.milliToInput(row.onHandMilli),
+                        row.unitSymbol,
+                    )
                 )
-            )
-        },
-        trailingContent = {
-            when {
-                row.onHandMilli <= 0 -> AssistChip(onClick = onClick, label = { Text(stringResource(R.string.out_of_stock)) })
-                row.minStockMilli > 0 && row.onHandMilli < row.minStockMilli ->
-                    AssistChip(onClick = onClick, label = { Text(stringResource(R.string.low)) })
-            }
-        },
-    )
-    HorizontalDivider()
+            },
+            trailingContent = {
+                when {
+                    row.onHandMilli <= 0 -> AssistChip(onClick = onClick, label = { Text(stringResource(R.string.out_of_stock)) })
+                    row.minStockMilli > 0 && row.onHandMilli < row.minStockMilli ->
+                        AssistChip(onClick = onClick, label = { Text(stringResource(R.string.low)) })
+                }
+            },
+            colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surface),
+        )
+    }
 }
 
 @Composable
@@ -110,7 +115,9 @@ private fun EmptyState(query: String, canAdd: Boolean, onAddWithBarcode: (String
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
         if (query.isEmpty()) {
-            Text(stringResource(R.string.stock_empty), style = MaterialTheme.typography.titleMedium)
+            Icon(Icons.Filled.Inventory2, contentDescription = null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.primary)
+            Spacer(Modifier.height(16.dp))
+            Text(stringResource(R.string.stock_empty), style = MaterialTheme.typography.titleLarge)
             Spacer(Modifier.height(8.dp))
             Text(stringResource(R.string.stock_empty_hint), style = MaterialTheme.typography.bodyMedium)
         } else {

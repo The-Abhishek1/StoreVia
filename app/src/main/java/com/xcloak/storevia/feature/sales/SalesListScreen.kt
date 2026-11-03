@@ -6,6 +6,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ReceiptLong
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -56,25 +57,32 @@ fun SalesListScreen(onNewSale: () -> Unit, onOpen: (String) -> Unit, vm: SalesLi
                 Modifier.padding(padding).fillMaxSize().padding(32.dp),
                 verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                Text(stringResource(R.string.sales_empty), style = MaterialTheme.typography.titleMedium)
+                Icon(Icons.Filled.ReceiptLong, contentDescription = null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.height(16.dp))
+                Text(stringResource(R.string.sales_empty), style = MaterialTheme.typography.titleLarge)
                 Spacer(Modifier.height(8.dp))
                 Text(stringResource(R.string.sales_empty_hint), style = MaterialTheme.typography.bodyMedium)
             }
-            else -> LazyColumn(Modifier.padding(padding), contentPadding = PaddingValues(bottom = 96.dp)) {
+            else -> LazyColumn(
+                Modifier.padding(padding),
+                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 112.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 items(list, key = { it.id }) { s ->
                     val due = s.totalPaise - s.returnedPaise - s.paidPaise
-                    ListItem(
-                        modifier = Modifier.clickable { onOpen(s.id) },
-                        headlineContent = { Text(Money(s.totalPaise).format(), style = MaterialTheme.typography.titleMedium) },
-                        supportingContent = {
-                            Text(s.invoiceNo + " · " + Instant.ofEpochMilli(s.createdAt).atZone(ZoneId.systemDefault()).format(ROW_DATE))
-                        },
-                        trailingContent = {
-                            if (s.status == com.xcloak.storevia.core.database.entity.SaleStatus.CANCELLED) AssistChip(onClick = { onOpen(s.id) }, label = { Text(stringResource(R.string.status_cancelled)) })
-                            else if (due > 0) AssistChip(onClick = { onOpen(s.id) }, label = { Text(stringResource(R.string.due_chip, Money(due).format())) })
-                        },
-                    )
-                    HorizontalDivider()
+                    Card(Modifier.fillMaxWidth().clickable { onOpen(s.id) }) {
+                        ListItem(
+                            headlineContent = { Text(Money(s.totalPaise).format(), style = MaterialTheme.typography.titleMedium) },
+                            supportingContent = {
+                                Text(s.invoiceNo + " · " + Instant.ofEpochMilli(s.createdAt).atZone(ZoneId.systemDefault()).format(ROW_DATE))
+                            },
+                            trailingContent = {
+                                if (s.status == com.xcloak.storevia.core.database.entity.SaleStatus.CANCELLED) AssistChip(onClick = { onOpen(s.id) }, label = { Text(stringResource(R.string.status_cancelled)) })
+                                else if (due > 0) AssistChip(onClick = { onOpen(s.id) }, label = { Text(stringResource(R.string.due_chip, Money(due).format())) })
+                            },
+                            colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surface),
+                        )
+                    }
                 }
             }
         }
