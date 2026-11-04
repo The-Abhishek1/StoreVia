@@ -162,6 +162,11 @@
     <!-- Sales list and receipt -->
     <string name="sales_empty">No sales yet</string>
     <string name="sales_empty_hint">Completed bills appear here.</string>
+    <string name="sales_search_hint">Search invoice number</string>
+    <string name="sales_filter_all">All</string>
+    <string name="sales_filter_outstanding">Outstanding</string>
+    <string name="sales_filter_cancelled">Cancelled</string>
+    <string name="sales_no_matches">No sales match these filters.</string>
     <string name="due_chip">Due %1$s</string>
     <string name="receipt">Receipt</string>
     <string name="share_receipt">Share receipt</string>

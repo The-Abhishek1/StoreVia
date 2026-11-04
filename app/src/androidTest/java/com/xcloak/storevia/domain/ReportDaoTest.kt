@@ -136,4 +136,32 @@ class ReportDaoTest {
         assertEquals(1, mainExpiring)
         assertEquals(0, secondExpiring)
     }
+
+    @Test fun salesReportsAndRecentSalesDoNotCrossBranches() = runBlocking {
+        db.saleDao().insertSale(
+            SaleEntity(
+                invoiceNo = "SECOND-2",
+                branchId = "branch-2",
+                subtotalPaise = 700,
+                discountPaise = 0,
+                taxPaise = 0,
+                roundOffPaise = 0,
+                totalPaise = 700,
+                paidPaise = 700,
+            ),
+        )
+
+        val mainRecent = db.saleDao().observeRecent(200, "default").first()
+        val secondRecent = db.saleDao().observeRecent(200, "branch-2").first()
+        val mainReport = db.reportDao().sales(from, to, branchId = "default").first()
+        val secondReport = db.reportDao().sales(from, to, branchId = "branch-2").first()
+
+        assertEquals(1, mainRecent.size)
+        assertEquals("INV-00001", mainRecent.single().invoiceNo)
+        assertEquals(1, secondRecent.size)
+        assertEquals("SECOND-2", secondRecent.single().invoiceNo)
+        assertEquals(1, mainReport.bills)
+        assertEquals(1, secondReport.bills)
+        assertEquals(700L, secondReport.grossPaise)
+    }
 }

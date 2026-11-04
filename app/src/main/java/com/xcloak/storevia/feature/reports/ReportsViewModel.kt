@@ -8,7 +8,9 @@ import com.xcloak.storevia.core.database.entity.ProductEntity
 import com.xcloak.storevia.data.prefs.AppPrefs
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.ZoneId
 import javax.inject.Inject
@@ -38,11 +40,20 @@ private data class ReportQuery(
     val to: Long,
     val method: PaymentMethod?,
     val filters: ReportFilters,
+    val period: Period,
 )
 private data class SelectedReportFilters(
     val period: Period,
     val method: PaymentMethod?,
     val filters: ReportFilters,
+)
+private data class ReportSnapshot(
+    val query: ReportQuery? = null,
+    val sales: SalesReport = SalesReport(),
+    val payments: List<PaymentTotalRow> = emptyList(),
+    val top: List<TopProductRow> = emptyList(),
+    val stock: StockReport = StockReport(),
+    val purchaseSpendPaise: Long = 0,
 )
 
 internal fun reportDateBounds(
@@ -145,62 +156,81 @@ class ReportsViewModel @Inject constructor(
     }
 
     private val zone = ZoneId.systemDefault()
-    private val reportRange = combine(period, _customRange) { p, custom ->
-        reportDateBounds(p, LocalDate.now(), custom, zone)
-    }.distinctUntilChanged()
-
-    private val query = combine(reportRange, paymentMethod, filters) { range, method, selected ->
-        ReportQuery(range.first, range.second, method, selected)
-    }.distinctUntilChanged()
-
-    private val salesFlow: Flow<SalesReport> = query.flatMapLatest { q ->
-        combine(
-            reports.sales(q.from, q.to, q.method?.name, q.filters.productId, q.filters.categoryId, q.filters.customerId, q.filters.taxRateBp, q.filters.supplierId, q.filters.branchId),
-            reports.lines(q.from, q.to, q.method?.name, q.filters.productId, q.filters.categoryId, q.filters.customerId, q.filters.taxRateBp, q.filters.supplierId, q.filters.branchId),
-            reports.returnsTotal(q.from, q.to, q.method?.name, q.filters.productId, q.filters.categoryId, q.filters.customerId, q.filters.taxRateBp, q.filters.supplierId, q.filters.branchId),
-            reports.returnLines(q.from, q.to, q.method?.name, q.filters.productId, q.filters.categoryId, q.filters.customerId, q.filters.taxRateBp, q.filters.supplierId, q.filters.branchId),
-        ) { sales, lines, returns, retLines ->
-            SalesReport(
-                bills = sales.bills, grossPaise = sales.grossPaise, returnsPaise = returns, discountPaise = sales.discountPaise,
-                taxPaise = lines.taxPaise,
-                // Estimated gross profit: revenue excluding tax minus cost, less what was returned.
-                profitPaise = (lines.taxablePaise - lines.costPaise) - (retLines.taxablePaise - retLines.costPaise),
-            )
+    private val currentDay = flow {
+        while (true) {
+            val today = LocalDate.now(zone)
+            emit(today)
+            val nextDay = today.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
+            delay((nextDay - System.currentTimeMillis()).coerceAtLeast(1L))
         }
-    }
+    }.distinctUntilChanged()
 
-    private val stockFlow: Flow<StockReport> = combine(
-        prefs.settings.map { it.expiryWarnDays.coerceAtLeast(1) }.distinctUntilChanged(),
-        filters.map { it.branchId }.distinctUntilChanged(),
-    ) { expiryDays, branchId -> expiryDays to branchId }
+    private val reportRange = combine(period, _customRange, currentDay) { p, custom, today ->
+        reportDateBounds(p, today, custom, zone)
+    }.distinctUntilChanged()
+
+    private val query = combine(reportRange, paymentMethod, filters, period) { range, method, selected, selectedPeriod ->
+        ReportQuery(range.first, range.second, method, selected, selectedPeriod)
+    }.distinctUntilChanged()
+
+    private val expiryDays = prefs.settings
+        .map { it.expiryWarnDays.coerceAtLeast(1) }
         .distinctUntilChanged()
-        .flatMapLatest { (expiryDays, branchId) ->
-            val today = LocalDate.now()
-            val base = combine(
-                reports.stockValue(branchId),
-                reports.expiryBetween(today, today.plusDays(expiryDays.toLong()), branchId),
-                reports.expiryBetween(LocalDate.of(1970, 1, 1), today.minusDays(1), branchId),
-                batchDao.observeLowStock(branchId),
-                customerDao.observeTotalDue(),
-            ) { value, expiring, expired, low, khata ->
-                StockReport(value.costPaise, value.retailPaise, expiring, expired, low, khata)
-            }
-            combine(base, supplierDao.observeTotalPayable()) { st, payable -> st.copy(payablePaise = payable) }
-        }
 
-    private val paymentsFlow = query.flatMapLatest { q ->
-        reports.paymentsByMethod(
-            q.from, q.to, q.method?.name, q.filters.productId, q.filters.categoryId, q.filters.customerId, q.filters.taxRateBp, q.filters.supplierId, q.filters.branchId,
-        )
+    private val reportSnapshot: Flow<ReportSnapshot> = query.flatMapLatest { q ->
+        combine(expiryDays, currentDay) { days, today -> days to today }
+            .distinctUntilChanged()
+            .flatMapLatest { (days, today) ->
+                val sales = combine(
+                    reports.sales(q.from, q.to, q.method?.name, q.filters.productId, q.filters.categoryId, q.filters.customerId, q.filters.taxRateBp, q.filters.supplierId, q.filters.branchId),
+                    reports.lines(q.from, q.to, q.method?.name, q.filters.productId, q.filters.categoryId, q.filters.customerId, q.filters.taxRateBp, q.filters.supplierId, q.filters.branchId),
+                    reports.returnsTotal(q.from, q.to, q.method?.name, q.filters.productId, q.filters.categoryId, q.filters.customerId, q.filters.taxRateBp, q.filters.supplierId, q.filters.branchId),
+                    reports.returnLines(q.from, q.to, q.method?.name, q.filters.productId, q.filters.categoryId, q.filters.customerId, q.filters.taxRateBp, q.filters.supplierId, q.filters.branchId),
+                ) { totals, lines, returns, returnLines ->
+                    SalesReport(
+                        bills = totals.bills,
+                        grossPaise = totals.grossPaise,
+                        returnsPaise = returns,
+                        discountPaise = totals.discountPaise,
+                        taxPaise = lines.taxPaise,
+                        // Estimated gross profit: revenue excluding tax minus cost, less what was returned.
+                        profitPaise = (lines.taxablePaise - lines.costPaise) -
+                            (returnLines.taxablePaise - returnLines.costPaise),
+                    )
+                }
+                val payments = reports.paymentsByMethod(
+                    q.from, q.to, q.method?.name, q.filters.productId, q.filters.categoryId, q.filters.customerId, q.filters.taxRateBp, q.filters.supplierId, q.filters.branchId,
+                )
+                val topProducts = reports.topProducts(
+                    q.from, q.to, 5, q.method?.name, q.filters.productId, q.filters.categoryId, q.filters.customerId, q.filters.taxRateBp, q.filters.supplierId, q.filters.branchId,
+                )
+                val purchaseSpend = reports.purchaseSpend(q.from, q.to, q.filters.supplierId, q.filters.branchId)
+                val stockBase = combine(
+                    reports.stockValue(q.filters.branchId),
+                    reports.expiryBetween(today, today.plusDays(days.toLong()), q.filters.branchId),
+                    reports.expiryBetween(LocalDate.of(1970, 1, 1), today.minusDays(1), q.filters.branchId),
+                    batchDao.observeLowStock(q.filters.branchId),
+                    customerDao.observeTotalDue(),
+                ) { value, expiring, expired, low, khata ->
+                    StockReport(value.costPaise, value.retailPaise, expiring, expired, low, khata)
+                }
+                val stock = combine(stockBase, supplierDao.observeTotalPayable()) { report, payable ->
+                    report.copy(payablePaise = payable)
+                }
+                val salesData = combine(sales, payments, topProducts, purchaseSpend) { totals, paymentRows, products, purchases ->
+                    ReportSnapshot(
+                        sales = totals,
+                        payments = paymentRows,
+                        top = products,
+                        purchaseSpendPaise = purchases,
+                    )
+                }
+                combine(salesData, stock) { data, stockReport -> data.copy(stock = stockReport) }
+            }
+            .onStart { emit(ReportSnapshot(query = q)) }
+            .map { it.copy(query = q) }
     }
-    private val topProductsFlow = query.flatMapLatest { q ->
-        reports.topProducts(
-            q.from, q.to, 5, q.method?.name, q.filters.productId, q.filters.categoryId, q.filters.customerId, q.filters.taxRateBp, q.filters.supplierId, q.filters.branchId,
-        )
-    }
-    private val purchaseSpendFlow = query.flatMapLatest { q ->
-        reports.purchaseSpend(q.from, q.to, q.filters.supplierId, q.filters.branchId)
-    }
+
     private val selectedFilters = combine(period, paymentMethod, filters) { p, method, selected ->
         SelectedReportFilters(p, method, selected)
     }
@@ -221,25 +251,48 @@ class ReportsViewModel @Inject constructor(
         )
     }
 
-    private val reportBase = combine(
-        selectedFilters,
-        salesFlow,
-        paymentsFlow,
-        topProductsFlow,
-        stockFlow,
-    ) { filters, sales, pay, top, stock ->
+    init {
+        viewModelScope.launch {
+            options.collect { available ->
+                val productIds = available.products.mapTo(mutableSetOf()) { it.id }
+                val categoryIds = available.categories.mapTo(mutableSetOf()) { it.id }
+                val customerIds = available.customers.mapTo(mutableSetOf()) { it.id }
+                val supplierIds = available.suppliers.mapTo(mutableSetOf()) { it.id }
+                val branchIds = available.branches.mapTo(mutableSetOf()) { it.id }
+                val taxRates = available.taxRatesBp.toSet()
+                filters.update { current ->
+                    current.copy(
+                        productId = current.productId?.takeIf(productIds::contains),
+                        categoryId = current.categoryId?.takeIf(categoryIds::contains),
+                        customerId = current.customerId?.takeIf(customerIds::contains),
+                        supplierId = current.supplierId?.takeIf(supplierIds::contains),
+                        branchId = current.branchId?.takeIf(branchIds::contains),
+                        taxRateBp = current.taxRateBp?.takeIf(taxRates::contains),
+                    )
+                }
+            }
+        }
+    }
+
+    private val reportBase = combine(query, selectedFilters, reportSnapshot) { currentQuery, filters, snapshot ->
+        val currentSnapshot = snapshot.takeIf {
+            it.query == currentQuery &&
+                currentQuery.period == filters.period &&
+                currentQuery.method == filters.method &&
+                currentQuery.filters == filters.filters
+        } ?: ReportSnapshot(query = currentQuery)
         ReportsUi(
             filters.period, filters.method, filters.filters,
-            sales = sales, payments = pay, top = top, stock = stock,
+            sales = currentSnapshot.sales,
+            payments = currentSnapshot.payments,
+            top = currentSnapshot.top,
+            stock = currentSnapshot.stock,
+            purchaseSpendPaise = currentSnapshot.purchaseSpendPaise,
         )
     }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ReportsUi())
 
-    private val reportUi = combine(reportBase, purchaseSpendFlow) { current, purchaseSpend ->
-        current.copy(purchaseSpendPaise = purchaseSpend)
-    }
-
-    val ui: StateFlow<ReportsUi> = combine(reportUi, options) { current, choices ->
+    val ui: StateFlow<ReportsUi> = combine(reportBase, options) { current, choices ->
         current.copy(filterOptions = choices)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ReportsUi())
 }
