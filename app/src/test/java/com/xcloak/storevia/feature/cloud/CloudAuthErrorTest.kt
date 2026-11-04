@@ -1,10 +1,22 @@
 package com.xcloak.storevia.feature.cloud
 
+import com.xcloak.storevia.data.cloud.cloudAccountIdentifier
+import com.xcloak.storevia.data.cloud.supabaseAuthorizationHeader
 import java.net.UnknownHostException
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class CloudAuthErrorTest {
+    @Test fun confirmationRequestsUseTheSupabaseAnonKeyAsBearerAuthorization() {
+        assertEquals("Bearer public-anon-key", supabaseAuthorizationHeader("public-anon-key"))
+    }
+
+    @Test fun accountIdentifierSupportsEmailAndPhoneSessions() {
+        assertEquals("owner@example.com", cloudAccountIdentifier("owner@example.com", "+919876543210"))
+        assertEquals("+919876543210", cloudAccountIdentifier(null, "+919876543210"))
+        assertEquals(null, cloudAccountIdentifier(null, null))
+    }
+
     @Test fun offlineFailureIsReportedAsConnectivityEvenIfRequestMentionsRedirect() {
         val error = RuntimeException(
             "Request failed with redirect_to parameter",

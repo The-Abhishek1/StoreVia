@@ -14,6 +14,9 @@ import dagger.hilt.components.SingletonComponent
 import kotlinx.coroutines.flow.first
 import java.time.LocalDate
 
+internal suspend fun resolveAlertBranchId(branchDao: BranchDao): String? =
+    branchDao.selectedId() ?: branchDao.firstId()
+
 @EntryPoint
 @InstallIn(SingletonComponent::class)
 interface AlertsEntryPoint {
@@ -29,13 +32,19 @@ class AlertsWorker(context: Context, params: WorkerParameters) : CoroutineWorker
         val ep = EntryPointAccessors.fromApplication(applicationContext, AlertsEntryPoint::class.java)
         val settings = ep.prefs().settings.value
         if (settings.alertsEnabled) {
-            val today = LocalDate.now()
-            val branchId = ep.branchDao().selectedId() ?: ep.branchDao().firstId() ?: "default"
-            val expiring = ep.reportDao().expiryBetween(today, today.plusDays(settings.expiryWarnDays.toLong()), branchId).first()
-            val expired = ep.reportDao().expiryBetween(LocalDate.of(1970, 1, 1), today.minusDays(1), branchId).first()
-            val low = ep.batchDao().observeLowStock(branchId).first()
-            val plan = AlertPlan(expiring.batches, expiring.costPaise, expired.batches, expired.costPaise, low.size)
-            if (!plan.isEmpty) AlertNotifier.show(applicationContext, plan, settings.expiryWarnDays)
+            val branchId = resolveAlertBranchId(ep.branchDao())
+            if (branchId != null) {
+                val today = LocalDate.now()
+                val expiring = ep.reportDao().expiryBetween(today, today.plusDays(settings.expiryWarnDays.toLong()), branchId).first()
+                val expired = ep.reportDao().expiryBetween(LocalDate.of(1970, 1, 1), today.minusDays(1), branchId).first()
+                val low = ep.batchDao().observeLowStock(branchId).first()
+                val plan = AlertPlan(expiring.batches, expiring.costPaise, expired.batches, expired.costPaise, low.size)
+                if (!plan.isEmpty) AlertNotifier.show(applicationContext, plan, settings.expiryWarnDays)
+                else AlertNotifier.clear(applicationContext)
+            }
+            else AlertNotifier.clear(applicationContext)
+        } else {
+            AlertNotifier.clear(applicationContext)
         }
         Result.success()
     } catch (e: Exception) {

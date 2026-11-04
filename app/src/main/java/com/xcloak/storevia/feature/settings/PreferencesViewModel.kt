@@ -27,29 +27,43 @@ class PreferencesViewModel @Inject constructor(
     val settings: StateFlow<AppSettings> = prefs.settings
 
     fun setAlerts(on: Boolean) {
+        if (!canManageSettings()) return
         prefs.update { copy(alertsEnabled = on) }
+        if (!on) AlertNotifier.clear(context)
         AlertScheduler.schedule(context, prefs.settings.value, reschedule = true)
     }
 
-    fun setExpiryDays(days: Int) = prefs.update { copy(expiryWarnDays = days) }
-    fun setThemeMode(mode: ThemeMode) = prefs.update { copy(themeMode = mode) }
+    fun setExpiryDays(days: Int) {
+        if (canManageSettings()) prefs.update { copy(expiryWarnDays = days) }
+    }
+    fun setThemeMode(mode: ThemeMode) {
+        if (canManageSettings()) prefs.update { copy(themeMode = mode) }
+    }
 
     fun setAlertHour(hour: Int) {
+        if (!canManageSettings()) return
         prefs.update { copy(alertHour = hour) }
         AlertScheduler.schedule(context, prefs.settings.value, reschedule = true)
     }
 
     fun setLock(on: Boolean) {
-        if (!access.actor().can(Permission.MANAGE_SETTINGS)) return
+        if (!canManageSettings()) return
         prefs.update { copy(lockEnabled = on) }
         viewModelScope.launch { audit.log(AuditAction.SETTINGS_CHANGED, "App lock turned ${if (on) "on" else "off"}") }
     }
-    fun setLockGrace(seconds: Int) = prefs.update { copy(lockGraceSeconds = seconds) }
+    fun setLockGrace(seconds: Int) {
+        if (canManageSettings()) prefs.update { copy(lockGraceSeconds = seconds) }
+    }
 
     /** Lets the owner check that notifications work, without waiting for tomorrow morning. */
-    fun sendTestAlert() = AlertNotifier.show(
-        context,
-        AlertPlan(expiringBatches = 3, expiringCostPaise = 125_000, expiredBatches = 1, expiredCostPaise = 40_000, lowStockProducts = 5),
-        prefs.settings.value.expiryWarnDays,
-    )
+    fun sendTestAlert() {
+        if (!canManageSettings()) return
+        AlertNotifier.show(
+            context,
+            AlertPlan(expiringBatches = 3, expiringCostPaise = 125_000, expiredBatches = 1, expiredCostPaise = 40_000, lowStockProducts = 5),
+            prefs.settings.value.expiryWarnDays,
+        )
+    }
+
+    private fun canManageSettings() = access.actor().can(Permission.MANAGE_SETTINGS)
 }

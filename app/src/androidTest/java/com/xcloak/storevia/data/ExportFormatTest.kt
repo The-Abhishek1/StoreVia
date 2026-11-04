@@ -9,6 +9,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.xcloak.storevia.core.database.StorviaDatabase
 import com.xcloak.storevia.core.database.entity.ProductEntity
 import com.xcloak.storevia.core.database.entity.UnitEntity
+import com.xcloak.storevia.core.util.Csv
 import com.xcloak.storevia.data.export.CsvExporter
 import com.xcloak.storevia.data.export.ExportFormat
 import com.xcloak.storevia.data.export.ExportKind
@@ -57,6 +58,20 @@ class ExportFormatTest {
         assertTrue(sheet.contains("""<c r="H2" s="2"><v>7.5</v></c>"""))
         assertTrue(sheet.contains("""<c r="B2" s="0" t="inlineStr">"""))
         entries.values.forEach(::assertWellFormedXml)
+    }
+
+    @Test fun csvEscapesFormulaLikeProductTextColumns() = runBlocking {
+        val unit = UnitEntity(name = "Formula unit", symbol = " @SUM(A1)", allowDecimal = false)
+        db.unitDao().insertAll(listOf(unit))
+        db.productDao().insert(
+            ProductEntity(name = "  =1+1", sku = "+SKU", hsnCode = "@HSN", unitId = unit.id, sellPricePaise = 0),
+        )
+
+        val rows = Csv.parse(exporter.build(ExportKind.PRODUCTS))
+        val row = rows.single { it.firstOrNull() == "'  =1+1" }
+        assertEquals("'+SKU", row[1])
+        assertEquals("' @SUM(A1)", row[3])
+        assertEquals("'@HSN", row[4])
     }
 
     @Test fun docxContainsAFormattedTableAndValidPackageXml() = runBlocking {

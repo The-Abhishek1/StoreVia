@@ -39,8 +39,10 @@ fun CustomersScreen(onBack: () -> Unit, onOpen: (String) -> Unit, vm: CustomersV
             )
         },
         floatingActionButton = {
-            ExtendedFloatingActionButton(onClick = { adding = true }, icon = { Icon(Icons.Filled.Add, null) },
-                text = { Text(stringResource(R.string.add_customer)) })
+            if (can(Permission.MANAGE_CUSTOMERS)) {
+                ExtendedFloatingActionButton(onClick = { adding = true }, icon = { Icon(Icons.Filled.Add, null) },
+                    text = { Text(stringResource(R.string.add_customer)) })
+            }
         },
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
@@ -92,7 +94,9 @@ fun CustomersScreen(onBack: () -> Unit, onOpen: (String) -> Unit, vm: CustomersV
         }
     }
 
-    if (adding) CustomerFormDialog(null, canEditLimit = can(Permission.EDIT_CREDIT_LIMIT), onSave = { n, p, l -> vm.add(n, p, l) }, onDismiss = { adding = false })
+    if (adding && can(Permission.MANAGE_CUSTOMERS)) {
+        CustomerFormDialog(null, canEditLimit = can(Permission.EDIT_CREDIT_LIMIT), onSave = { n, p, l -> vm.add(n, p, l) }, onDismiss = { adding = false })
+    }
 }
 
 @Composable

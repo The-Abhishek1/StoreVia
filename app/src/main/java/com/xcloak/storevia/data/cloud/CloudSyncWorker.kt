@@ -18,7 +18,7 @@ class CloudSyncWorker(context: Context, params: WorkerParameters) : CoroutineWor
     override suspend fun doWork(): Result {
         val repository = EntryPointAccessors.fromApplication(applicationContext, CloudSyncEntryPoint::class.java)
             .cloudAccountRepository()
-        if (!repository.isConfigured || repository.signedInEmail() == null) return Result.success()
+        if (!repository.isConfigured || !repository.hasSignedInSession()) return Result.success()
         return try {
             repository.syncNow()
             Result.success()

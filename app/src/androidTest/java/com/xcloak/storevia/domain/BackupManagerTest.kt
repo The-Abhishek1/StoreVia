@@ -16,6 +16,10 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.ByteArrayOutputStream
+import java.io.File
+import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
+import java.util.zip.ZipOutputStream
 
 /** Uses a real file-backed database (backups copy the database file), named like the app's. */
 @RunWith(AndroidJUnit4::class)
@@ -31,7 +35,11 @@ class BackupManagerTest {
         manager = BackupManager(ctx, db)
     }
 
-    @After fun tearDown() { db.close(); ctx.deleteDatabase(BackupManager.DB_NAME) }
+    @After fun tearDown() {
+        db.close()
+        File(ctx.cacheDir, "restore-staging.db").delete()
+        ctx.deleteDatabase(BackupManager.DB_NAME)
+    }
 
     private fun storeNameIn(path: String): String =
         SQLiteDatabase.openDatabase(path, null, SQLiteDatabase.OPEN_READONLY).use { c ->
@@ -61,6 +69,60 @@ class BackupManagerTest {
     @Test fun randomFilesAreRejected() = runBlocking {
         assertEquals(RestoreCheck.NotABackup, manager.prepareRestore(ByteArray(200) { 7 }, null))
         assertEquals(RestoreCheck.NotABackup, manager.prepareRestore(ByteArray(2), null))
+    }
+
+    @Test fun restoreRejectsOversizedManifestAndUnknownEntries() = runBlocking {
+        val oversizedManifest = ByteArrayOutputStream().also { out ->
+            ZipOutputStream(out).use { zip ->
+                zip.putNextEntry(ZipEntry("manifest.json"))
+                zip.write(ByteArray(64 * 1024 + 1))
+                zip.closeEntry()
+            }
+        }.toByteArray()
+        assertEquals(RestoreCheck.Corrupt, manager.prepareRestore(oversizedManifest, null))
+        assertFalse(File(ctx.cacheDir, "restore-staging.db").exists())
+
+        val unknownEntry = ByteArrayOutputStream().also { out ->
+            ZipOutputStream(out).use { zip ->
+                zip.putNextEntry(ZipEntry("unexpected.bin"))
+                zip.write(byteArrayOf(1))
+                zip.closeEntry()
+            }
+        }.toByteArray()
+        assertEquals(RestoreCheck.NotABackup, manager.prepareRestore(unknownEntry, null))
+        assertFalse(File(ctx.cacheDir, "restore-staging.db").exists())
+    }
+
+    @Test fun restoreRejectsManifestDatabaseVersionMismatch() = runBlocking {
+        db.storeDao().upsert(StoreEntity(name = "Ravi Stores"))
+        val backupOutput = ByteArrayOutputStream()
+        manager.writeBackup(backupOutput, null)
+        val original = backupOutput.toByteArray()
+        val entries = mutableMapOf<String, ByteArray>()
+        ZipInputStream(original.inputStream()).use { zip ->
+            while (true) {
+                val entry = zip.nextEntry ?: break
+                entries[entry.name] = zip.readBytes()
+                zip.closeEntry()
+            }
+        }
+        val actualVersion = db.openHelper.writableDatabase.version
+        val forgedManifest = entries.getValue("manifest.json")
+            .toString(Charsets.UTF_8)
+            .replace(Regex("\"dbVersion\":\\d+"), "\"dbVersion\":${actualVersion - 1}")
+        entries["manifest.json"] = forgedManifest.toByteArray()
+        val forgedBackup = ByteArrayOutputStream().also { out ->
+            ZipOutputStream(out).use { zip ->
+                entries.forEach { (name, bytes) ->
+                    zip.putNextEntry(ZipEntry(name))
+                    zip.write(bytes)
+                    zip.closeEntry()
+                }
+            }
+        }.toByteArray()
+
+        assertEquals(RestoreCheck.Corrupt, manager.prepareRestore(forgedBackup, null))
+        assertFalse(File(ctx.cacheDir, "restore-staging.db").exists())
     }
 
     @Test fun autoBackupsAreCreatedAndPruned() = runBlocking {

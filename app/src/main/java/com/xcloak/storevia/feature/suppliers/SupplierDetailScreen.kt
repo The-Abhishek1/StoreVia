@@ -19,10 +19,12 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xcloak.storevia.core.ui.LoadingState
 import com.xcloak.storevia.R
+import com.xcloak.storevia.core.access.Permission
 import com.xcloak.storevia.core.database.entity.PaymentMethod
 import com.xcloak.storevia.core.database.entity.SupplierLedgerType
 import com.xcloak.storevia.core.money.Money
 import com.xcloak.storevia.core.util.Parsing
+import com.xcloak.storevia.core.ui.can
 import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.ZoneId
@@ -38,20 +40,34 @@ fun SupplierDetailScreen(
     onOpenPurchase: (String) -> Unit,
     vm: SupplierDetailViewModel = hiltViewModel(),
 ) {
-    val ui by vm.ui.collectAsStateWithLifecycle()
+    val state by vm.ui.collectAsStateWithLifecycle()
     var paying by remember { mutableStateOf(false) }
     var oldBalance by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf(false) }
-    val d = ui
+    val d = state.detail
 
     Column(Modifier.fillMaxSize()) {
         TopAppBar(
             title = { Text(d?.supplier?.name.orEmpty(), maxLines = 1) },
             navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.back)) } },
-            actions = { if (d != null) IconButton(onClick = { editing = true }) { Icon(Icons.Filled.Edit, stringResource(R.string.edit)) } },
+            actions = {
+                if (d != null && can(Permission.MANAGE_PURCHASES)) {
+                    IconButton(onClick = { editing = true }) { Icon(Icons.Filled.Edit, stringResource(R.string.edit)) }
+                }
+            },
         )
-        if (d == null) {
+        if (!state.loaded) {
             LoadingState(Modifier.weight(1f).fillMaxWidth())
+            return@Column
+        }
+        if (d == null) {
+            Column(
+                Modifier.weight(1f).fillMaxWidth().padding(24.dp),
+                verticalArrangement = Arrangement.Center,
+            ) {
+                Text(stringResource(R.string.supplier_unavailable), style = MaterialTheme.typography.titleMedium)
+                TextButton(onClick = onBack) { Text(stringResource(R.string.back)) }
+            }
             return@Column
         }
 
@@ -64,11 +80,15 @@ fun SupplierDetailScreen(
             d.supplier.phone?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
             d.supplier.gstin?.let { Text(stringResource(R.string.gstin_label, it), style = MaterialTheme.typography.bodySmall) }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { onNewPurchase(d.supplier.id) }, modifier = Modifier.weight(1f)) { Text(stringResource(R.string.new_purchase)) }
-                OutlinedButton(onClick = { paying = true }, enabled = d.balancePaise > 0, modifier = Modifier.weight(1f)) { Text(stringResource(R.string.pay_supplier)) }
+            if (can(Permission.MANAGE_PURCHASES)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = { onNewPurchase(d.supplier.id) }, modifier = Modifier.weight(1f)) { Text(stringResource(R.string.new_purchase)) }
+                    OutlinedButton(onClick = { paying = true }, enabled = d.balancePaise > 0, modifier = Modifier.weight(1f)) { Text(stringResource(R.string.pay_supplier)) }
+                }
             }
-            TextButton(onClick = { oldBalance = true }) { Text(stringResource(R.string.add_old_payable)) }
+            if (can(Permission.MANAGE_PURCHASES)) {
+                TextButton(onClick = { oldBalance = true }) { Text(stringResource(R.string.add_old_payable)) }
+            }
             Text(stringResource(R.string.ledger_title), style = MaterialTheme.typography.titleMedium)
         }
 
@@ -105,7 +125,9 @@ fun SupplierDetailScreen(
 
     if (paying && d != null) PayDialog(d.balancePaise, vm) { paying = false }
     if (oldBalance) OldPayableDialog(vm) { oldBalance = false }
-    if (editing && d != null) SupplierFormDialog(d.supplier, onSave = { n, p, g -> vm.update(n, p, g) }, onDismiss = { editing = false })
+    if (editing && d != null && can(Permission.MANAGE_PURCHASES)) {
+        SupplierFormDialog(d.supplier, onSave = { n, p, g -> vm.update(n, p, g) }, onDismiss = { editing = false })
+    }
 }
 
 @Composable
@@ -113,9 +135,10 @@ private fun PayDialog(balancePaise: Long, vm: SupplierDetailViewModel, onDismiss
     var amount by remember { mutableStateOf(Parsing.paiseToInput(balancePaise)) }
     var method by remember { mutableStateOf(PaymentMethod.CASH) }
     var error by remember { mutableStateOf<Int?>(null) }
+    var saving by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!saving) onDismiss() },
         title = { Text(stringResource(R.string.pay_supplier)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -128,8 +151,25 @@ private fun PayDialog(balancePaise: Long, vm: SupplierDetailViewModel, onDismiss
                 }
             }
         },
-        confirmButton = { TextButton(onClick = { scope.launch { val e = vm.pay(amount, method); if (e == null) onDismiss() else error = e } }) { Text(stringResource(R.string.save)) } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
+        confirmButton = {
+            TextButton(
+                enabled = !saving,
+                onClick = {
+                    if (!saving) {
+                        saving = true
+                        scope.launch {
+                            try {
+                                val e = vm.pay(amount, method)
+                                if (e == null) onDismiss() else error = e
+                            } finally {
+                                saving = false
+                            }
+                        }
+                    }
+                },
+            ) { Text(stringResource(R.string.save)) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !saving) { Text(stringResource(R.string.cancel)) } },
     )
 }
 
@@ -137,9 +177,10 @@ private fun PayDialog(balancePaise: Long, vm: SupplierDetailViewModel, onDismiss
 private fun OldPayableDialog(vm: SupplierDetailViewModel, onDismiss: () -> Unit) {
     var amount by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<Int?>(null) }
+    var saving by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!saving) onDismiss() },
         title = { Text(stringResource(R.string.add_old_payable)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -149,7 +190,24 @@ private fun OldPayableDialog(vm: SupplierDetailViewModel, onDismiss: () -> Unit)
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
             }
         },
-        confirmButton = { TextButton(onClick = { scope.launch { val e = vm.addOldBalance(amount); if (e == null) onDismiss() else error = e } }) { Text(stringResource(R.string.save)) } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
+        confirmButton = {
+            TextButton(
+                enabled = !saving,
+                onClick = {
+                    if (!saving) {
+                        saving = true
+                        scope.launch {
+                            try {
+                                val e = vm.addOldBalance(amount)
+                                if (e == null) onDismiss() else error = e
+                            } finally {
+                                saving = false
+                            }
+                        }
+                    }
+                },
+            ) { Text(stringResource(R.string.save)) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !saving) { Text(stringResource(R.string.cancel)) } },
     )
 }

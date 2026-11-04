@@ -11,7 +11,7 @@ import com.xcloak.storevia.core.database.entity.SupplierLedgerType
 import javax.inject.Inject
 
 class SupplierPaymentException(val reason: Reason) : Exception(reason.name) {
-    enum class Reason { INVALID_AMOUNT, EXCEEDS_BALANCE }
+    enum class Reason { INVALID_AMOUNT, EXCEEDS_BALANCE, SUPPLIER_NOT_FOUND }
 }
 
 /** Records money paid to a supplier against what you owe. You can't pay more than you owe. */
@@ -25,6 +25,9 @@ class PaySupplierUseCase @Inject constructor(
         access.require(Permission.MANAGE_PURCHASES)
         if (amountPaise <= 0) throw SupplierPaymentException(SupplierPaymentException.Reason.INVALID_AMOUNT)
         db.withTransaction {
+            if (supplierDao.getById(supplierId) == null) {
+                throw SupplierPaymentException(SupplierPaymentException.Reason.SUPPLIER_NOT_FOUND)
+            }
             if (amountPaise > supplierDao.balance(supplierId)) throw SupplierPaymentException(SupplierPaymentException.Reason.EXCEEDS_BALANCE)
             supplierDao.insertLedger(
                 SupplierLedgerEntity(supplierId = supplierId, type = SupplierLedgerType.PAYMENT, amountPaise = -amountPaise,

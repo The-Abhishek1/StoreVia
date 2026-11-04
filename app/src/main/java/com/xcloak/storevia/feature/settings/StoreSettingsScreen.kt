@@ -57,7 +57,7 @@ fun StoreSettingsScreen(
                     Field(f.ownerName, { v -> vm.update { copy(ownerName = v) } }, R.string.field_owner_name_required)
                     Field(f.address, { v -> vm.update { copy(address = v) } }, R.string.field_address)
                     Field(f.city, { v -> vm.update { copy(city = v) } }, R.string.field_city_required)
-                    Field(f.phone, { v -> vm.update { copy(phone = v) } }, R.string.field_phone_plain, keyboard = KeyboardType.Phone)
+                    Field(f.phone, { v -> vm.update { copy(phone = v) } }, R.string.field_phone_plain, errText(ui.errors["phone"]), keyboard = KeyboardType.Phone)
                 }
             }
             Card(Modifier.fillMaxWidth()) {
@@ -75,35 +75,34 @@ fun StoreSettingsScreen(
                                 Icon(Icons.Filled.Edit, contentDescription = stringResource(R.string.branch_rename))
                             }
                         }
-
-                        editingBranch?.let { branch ->
-                            var name by remember(branch.id) { mutableStateOf(branch.name) }
-                            var error by remember(branch.id) { mutableStateOf<Int?>(null) }
-                            AlertDialog(
-                                onDismissRequest = { editingBranch = null },
-                                title = { Text(stringResource(R.string.branch_rename)) },
-                                text = {
-                                    OutlinedTextField(
-                                        value = name,
-                                        onValueChange = { name = it; error = null },
-                                        singleLine = true,
-                                        label = { Text(stringResource(R.string.branch_name)) },
-                                        isError = error != null,
-                                        supportingText = error?.let { res -> { Text(stringResource(res)) } },
-                                        modifier = Modifier.fillMaxWidth(),
-                                    )
-                                },
-                                confirmButton = {
-                                    TextButton(onClick = {
-                                        scope.launch {
-                                            error = branchVm.rename(branch.id, name)
-                                            if (error == null) editingBranch = null
-                                        }
-                                    }) { Text(stringResource(R.string.save)) }
-                                },
-                                dismissButton = { TextButton(onClick = { editingBranch = null }) { Text(stringResource(R.string.cancel)) } },
-                            )
-                        }
+                    }
+                    editingBranch?.let { branch ->
+                        var name by remember(branch.id) { mutableStateOf(branch.name) }
+                        var error by remember(branch.id) { mutableStateOf<Int?>(null) }
+                        AlertDialog(
+                            onDismissRequest = { editingBranch = null },
+                            title = { Text(stringResource(R.string.branch_rename)) },
+                            text = {
+                                OutlinedTextField(
+                                    value = name,
+                                    onValueChange = { name = it; error = null },
+                                    singleLine = true,
+                                    label = { Text(stringResource(R.string.branch_name)) },
+                                    isError = error != null,
+                                    supportingText = error?.let { res -> { Text(stringResource(res)) } },
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            },
+                            confirmButton = {
+                                TextButton(onClick = {
+                                    scope.launch {
+                                        error = branchVm.rename(branch.id, name)
+                                        if (error == null) editingBranch = null
+                                    }
+                                }) { Text(stringResource(R.string.save)) }
+                            },
+                            dismissButton = { TextButton(onClick = { editingBranch = null }) { Text(stringResource(R.string.cancel)) } },
+                        )
                     }
                     OutlinedTextField(
                         value = branchUi.name,
@@ -135,6 +134,8 @@ fun StoreSettingsScreen(
                         Box(Modifier.weight(1f)) { Field(f.invoicePrefix, { v -> vm.update { copy(invoicePrefix = v) } }, R.string.field_invoice_prefix, errText(ui.errors["prefix"]), capitalize = true) }
                         Box(Modifier.weight(1f)) { Field(f.nextInvoiceNo, { v -> vm.update { copy(nextInvoiceNo = v) } }, R.string.field_next_invoice, errText(ui.errors["next"]), KeyboardType.Number) }
                     }
+                    Field(f.deviceSeries, { v -> vm.update { copy(deviceSeries = v.uppercase()) } }, R.string.field_device_series, errText(ui.errors["deviceSeries"]), capitalize = true)
+                    Text(stringResource(R.string.device_series_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                         Column(Modifier.weight(1f).padding(end = 16.dp)) {
                             Text(stringResource(R.string.field_allow_negative), style = MaterialTheme.typography.bodyLarge)

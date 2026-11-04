@@ -25,6 +25,8 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
+import com.xcloak.storevia.core.access.Permission
+import com.xcloak.storevia.core.access.StaffSession
 import com.xcloak.storevia.R
 import com.xcloak.storevia.core.database.dao.*
 import com.xcloak.storevia.core.database.entity.PurchaseEntity
@@ -48,23 +50,46 @@ private fun Long.asDate() = Instant.ofEpochMilli(this).atZone(ZoneId.systemDefau
 
 @HiltViewModel
 @OptIn(ExperimentalCoroutinesApi::class)
-class PurchasesListViewModel @Inject constructor(dao: PurchaseDao, branchDao: BranchDao) : ViewModel() {
+class PurchasesListViewModel @Inject constructor(
+    dao: PurchaseDao,
+    branchDao: BranchDao,
+    session: StaffSession,
+) : ViewModel() {
     private val _query = MutableStateFlow("")
     private val _unpaidOnly = MutableStateFlow(false)
     val query: StateFlow<String> = _query.asStateFlow()
     val unpaidOnly: StateFlow<Boolean> = _unpaidOnly.asStateFlow()
+    val canManage: StateFlow<Boolean> = session.actorState
+        .map { it.can(Permission.MANAGE_PURCHASES) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, session.actor().can(Permission.MANAGE_PURCHASES))
+    val hasBranch: StateFlow<Boolean> = branchDao.observeActiveBranchId().map { it != null }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
 
     val rows: StateFlow<List<PurchaseListRow>?> = combine(
-        branchDao.observeSelectedId().map { it ?: "default" }.distinctUntilChanged(),
+        branchDao.observeActiveBranchId(),
         _query,
         _unpaidOnly,
-    ) { branchId, query, unpaidOnly -> Triple(branchId, query.trim(), unpaidOnly) }
-        .flatMapLatest { (branchId, query, unpaidOnly) -> dao.observeRecent(200, branchId, query, unpaidOnly) }
+        canManage,
+    ) { branchId, query, unpaidOnly, allowed -> PurchaseListFilter(branchId, query.trim(), unpaidOnly, allowed) }
+        .flatMapLatest { filter ->
+            if (filter.allowed && filter.branchId != null) {
+                dao.observeRecent(200, filter.branchId, filter.query, filter.unpaidOnly)
+            } else {
+                flowOf(emptyList<PurchaseListRow>())
+            }
+        }
         .map<List<PurchaseListRow>, List<PurchaseListRow>?> { it }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     fun setQuery(value: String) { _query.value = value }
     fun setUnpaidOnly(value: Boolean) { _unpaidOnly.value = value }
+
+    private data class PurchaseListFilter(
+        val branchId: String?,
+        val query: String,
+        val unpaidOnly: Boolean,
+        val allowed: Boolean,
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -73,6 +98,8 @@ fun PurchasesListScreen(onBack: () -> Unit, onNew: () -> Unit, onOpen: (String) 
     val rows by vm.rows.collectAsStateWithLifecycle()
     val query by vm.query.collectAsStateWithLifecycle()
     val unpaidOnly by vm.unpaidOnly.collectAsStateWithLifecycle()
+    val canManage by vm.canManage.collectAsStateWithLifecycle()
+    val hasBranch by vm.hasBranch.collectAsStateWithLifecycle()
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
@@ -81,9 +108,19 @@ fun PurchasesListScreen(onBack: () -> Unit, onNew: () -> Unit, onOpen: (String) 
                 navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.back)) } },
             )
         },
-        floatingActionButton = { ExtendedFloatingActionButton(onClick = onNew, icon = { Icon(Icons.Filled.Add, null) }, text = { Text(stringResource(R.string.new_purchase)) }) },
+        floatingActionButton = {
+            if (canManage) ExtendedFloatingActionButton(onClick = onNew, icon = { Icon(Icons.Filled.Add, null) }, text = { Text(stringResource(R.string.new_purchase)) })
+        },
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
+            if (!canManage) {
+                Text(stringResource(R.string.err_permission_denied), Modifier.padding(24.dp))
+                return@Column
+            }
+            if (!hasBranch) {
+                Text(stringResource(R.string.err_branch_required), Modifier.padding(24.dp))
+                return@Column
+            }
             OutlinedTextField(
                 value = query,
                 onValueChange = vm::setQuery,
@@ -137,10 +174,27 @@ fun PurchasesListScreen(onBack: () -> Unit, onNew: () -> Unit, onOpen: (String) 
 data class PurchaseDetailUi(val purchase: PurchaseEntity, val supplierName: String?, val lines: List<PurchaseLineEntity>)
 
 @HiltViewModel
-class PurchaseDetailViewModel @Inject constructor(handle: SavedStateHandle, purchaseDao: PurchaseDao, supplierDao: SupplierDao) : ViewModel() {
+@OptIn(ExperimentalCoroutinesApi::class)
+class PurchaseDetailViewModel @Inject constructor(
+    handle: SavedStateHandle,
+    purchaseDao: PurchaseDao,
+    supplierDao: SupplierDao,
+    branchDao: BranchDao,
+    session: StaffSession,
+) : ViewModel() {
     private val id: String = checkNotNull(handle["id"])
-    val ui: StateFlow<PurchaseDetailUi?> = combine(purchaseDao.observeById(id), purchaseDao.observeLines(id)) { p, lines ->
-        if (p == null) null else PurchaseDetailUi(p, p.supplierId?.let { supplierDao.getById(it)?.name }, lines)
+    val canManage: StateFlow<Boolean> = session.actorState
+        .map { it.can(Permission.MANAGE_PURCHASES) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, session.actor().can(Permission.MANAGE_PURCHASES))
+    val hasBranch: StateFlow<Boolean> = branchDao.observeActiveBranchId().map { it != null }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+    val ui: StateFlow<PurchaseDetailUi?> = combine(branchDao.observeActiveBranchId(), canManage) { branchId, allowed ->
+        branchId.takeIf { allowed }
+    }.flatMapLatest { branchId ->
+        if (branchId == null) flowOf<PurchaseDetailUi?>(null)
+        else combine(purchaseDao.observeById(id, branchId), purchaseDao.observeLines(id, branchId)) { p, lines ->
+            if (p == null) null else PurchaseDetailUi(p, p.supplierId?.let { supplierDao.getById(it)?.name }, lines)
+        }
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 }
 
@@ -148,12 +202,22 @@ class PurchaseDetailViewModel @Inject constructor(handle: SavedStateHandle, purc
 @Composable
 fun PurchaseDetailScreen(onBack: () -> Unit, vm: PurchaseDetailViewModel = hiltViewModel()) {
     val ui by vm.ui.collectAsStateWithLifecycle()
+    val canManage by vm.canManage.collectAsStateWithLifecycle()
+    val hasBranch by vm.hasBranch.collectAsStateWithLifecycle()
     val d = ui
     Column(Modifier.fillMaxSize()) {
         TopAppBar(
             title = { Text(stringResource(R.string.purchase_title)) },
             navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.back)) } },
         )
+        if (!canManage) {
+            Text(stringResource(R.string.err_permission_denied), Modifier.weight(1f).padding(24.dp))
+            return@Column
+        }
+        if (!hasBranch) {
+            Text(stringResource(R.string.err_branch_required), Modifier.weight(1f).padding(24.dp))
+            return@Column
+        }
         if (d == null) {
             LoadingState(Modifier.weight(1f).fillMaxWidth())
             return@Column
@@ -187,21 +251,42 @@ data class ReorderUi(val storeName: String, val rows: List<ReorderRow>)
 
 @HiltViewModel
 @OptIn(ExperimentalCoroutinesApi::class)
-class ReorderViewModel @Inject constructor(reportDao: ReportDao, storeDao: StoreDao, branchDao: BranchDao) : ViewModel() {
+class ReorderViewModel @Inject constructor(
+    reportDao: ReportDao,
+    storeDao: StoreDao,
+    branchDao: BranchDao,
+    session: StaffSession,
+) : ViewModel() {
+    val canManage: StateFlow<Boolean> = session.actorState
+        .map { it.can(Permission.MANAGE_PURCHASES) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, session.actor().can(Permission.MANAGE_PURCHASES))
+    val hasBranch: StateFlow<Boolean> = branchDao.observeActiveBranchId().map { it != null }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+
     val ui: StateFlow<ReorderUi?> = combine(
-        branchDao.observeSelectedId().map { it ?: "default" }.distinctUntilChanged(),
+        branchDao.observeActiveBranchId(),
         storeDao.observe(),
-    ) { branchId, store -> branchId to store }
-        .flatMapLatest { (branchId, store) ->
-            reportDao.reorderRows(branchId).map { rows -> ReorderUi(store?.name.orEmpty(), rows) }
+        canManage,
+    ) { branchId, store, allowed -> ReorderFilter(branchId, store, allowed) }
+        .flatMapLatest { filter ->
+            if (!filter.allowed || filter.branchId == null) flowOf<ReorderUi?>(null)
+            else reportDao.reorderRows(filter.branchId).map { rows -> ReorderUi(filter.store?.name.orEmpty(), rows) }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    private data class ReorderFilter(
+        val branchId: String?,
+        val store: com.xcloak.storevia.core.database.entity.StoreEntity?,
+        val allowed: Boolean,
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ReorderScreen(onBack: () -> Unit, onNewPurchase: () -> Unit, vm: ReorderViewModel = hiltViewModel()) {
     val ui by vm.ui.collectAsStateWithLifecycle()
+    val canManage by vm.canManage.collectAsStateWithLifecycle()
+    val hasBranch by vm.hasBranch.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val d = ui
     Column(Modifier.fillMaxSize()) {
@@ -209,12 +294,20 @@ fun ReorderScreen(onBack: () -> Unit, onNewPurchase: () -> Unit, vm: ReorderView
             title = { Text(stringResource(R.string.reorder_title)) },
             navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.back)) } },
             actions = {
-                if (d != null && d.rows.isNotEmpty()) IconButton(onClick = {
+                if (canManage && d != null && d.rows.isNotEmpty()) IconButton(onClick = {
                     val send = Intent(Intent.ACTION_SEND).apply { type = "text/plain"; putExtra(Intent.EXTRA_TEXT, ReorderPlanner.shareText(d.storeName, d.rows)) }
                     context.startActivity(Intent.createChooser(send, null))
                 }) { Icon(Icons.Filled.Share, stringResource(R.string.share_list)) }
             },
         )
+        if (!canManage) {
+            Text(stringResource(R.string.err_permission_denied), Modifier.weight(1f).padding(24.dp))
+            return@Column
+        }
+        if (!hasBranch) {
+            Text(stringResource(R.string.err_branch_required), Modifier.weight(1f).padding(24.dp))
+            return@Column
+        }
         if (d == null) {
             LoadingState(Modifier.weight(1f).fillMaxWidth())
             return@Column

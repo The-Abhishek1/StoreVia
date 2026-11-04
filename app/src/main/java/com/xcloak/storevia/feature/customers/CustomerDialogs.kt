@@ -11,39 +11,53 @@ import androidx.compose.ui.unit.dp
 import com.xcloak.storevia.R
 import com.xcloak.storevia.core.database.entity.CustomerEntity
 import com.xcloak.storevia.core.util.Parsing
+import kotlinx.coroutines.launch
 
 /** Used both to add a customer and to edit one. [onSave] returns false when the input is invalid. */
 @Composable
 fun CustomerFormDialog(
     initial: CustomerEntity?,
     canEditLimit: Boolean = true,
-    onSave: (name: String, phone: String, limit: String) -> Boolean,
+    onSave: suspend (name: String, phone: String, limit: String) -> Boolean,
     onDismiss: () -> Unit,
 ) {
     var name by remember { mutableStateOf(initial?.name.orEmpty()) }
     var phone by remember { mutableStateOf(initial?.phone.orEmpty()) }
     var limit by remember { mutableStateOf(initial?.creditLimitPaise?.let { Parsing.paiseToInput(it) }.orEmpty()) }
     var invalid by remember { mutableStateOf(false) }
+    var saving by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
 
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!saving) onDismiss() },
         title = { Text(stringResource(if (initial == null) R.string.add_customer else R.string.edit_customer)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(name, { name = it }, singleLine = true, label = { Text(stringResource(R.string.field_customer_name)) })
-                OutlinedTextField(phone, { phone = it }, singleLine = true, label = { Text(stringResource(R.string.field_phone)) },
+                OutlinedTextField(name, { name = it }, enabled = !saving, singleLine = true, label = { Text(stringResource(R.string.field_customer_name)) })
+                OutlinedTextField(phone, { phone = it }, enabled = !saving, singleLine = true, label = { Text(stringResource(R.string.field_phone)) },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone))
-                if (canEditLimit) OutlinedTextField(limit, { limit = it; invalid = false }, singleLine = true, isError = invalid,
+                if (canEditLimit) OutlinedTextField(limit, { limit = it; invalid = false }, enabled = !saving, singleLine = true, isError = invalid,
                     label = { Text(stringResource(R.string.field_credit_limit)) },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
             }
         },
         confirmButton = {
             TextButton(
-                enabled = name.isNotBlank(),
-                onClick = { if (onSave(name, phone, limit)) onDismiss() else invalid = true },
+                enabled = name.isNotBlank() && !saving,
+                onClick = {
+                    if (!saving) {
+                        saving = true
+                        scope.launch {
+                            try {
+                                if (onSave(name, phone, limit)) onDismiss() else invalid = true
+                            } finally {
+                                saving = false
+                            }
+                        }
+                    }
+                },
             ) { Text(stringResource(R.string.save)) }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !saving) { Text(stringResource(R.string.cancel)) } },
     )
 }

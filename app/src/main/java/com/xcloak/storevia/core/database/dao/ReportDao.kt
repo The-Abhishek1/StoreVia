@@ -214,6 +214,8 @@ interface ReportDao {
                      p.minStockMilli AS minStockMilli, p.costPaise AS costPaise
               FROM products p JOIN units u ON u.id = p.unitId
               WHERE p.deletedAt IS NULL AND p.isActive = 1 AND p.minStockMilli > 0
+                AND (p.parentProductId IS NOT NULL OR NOT EXISTS
+                     (SELECT 1 FROM products child WHERE child.parentProductId = p.id AND child.deletedAt IS NULL AND child.isActive = 1))
               GROUP BY p.id HAVING onHandMilli < p.minStockMilli
               ORDER BY p.name COLLATE NOCASE""")
     fun reorderRows(branchId: String? = null): Flow<List<ReorderRow>>

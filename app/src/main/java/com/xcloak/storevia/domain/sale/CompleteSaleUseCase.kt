@@ -139,8 +139,11 @@ class CompleteSaleUseCase @Inject constructor(
             if (credit > 0) access.require(Permission.SELL_ON_CREDIT)
             if (credit > 0 && customerId == null)
                 throw SaleValidationException("Choose a customer to sell on credit")
+            val customer = customerId?.let {
+                customerDao.getById(it) ?: throw SaleValidationException("Customer is no longer available")
+            }
             if (credit > 0 && customerId != null) {
-                val limit = customerDao.getById(customerId)?.creditLimitPaise
+                val limit = customer?.creditLimitPaise
                 val balance = customerDao.balance(customerId)
                 if (limit != null && balance + credit > limit) throw CreditLimitExceededException(limit, balance)
             }

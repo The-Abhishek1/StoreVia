@@ -27,6 +27,12 @@ object AlertNotifier {
 
     fun canNotify(context: Context) = NotificationManagerCompat.from(context).areNotificationsEnabled()
 
+    fun clear(context: Context) {
+        val nm = NotificationManagerCompat.from(context)
+        nm.cancel(ID_EXPIRY)
+        nm.cancel(ID_LOW_STOCK)
+    }
+
     /** Posts one notification for expiry (expiring and expired together) and one for low stock. Same ids replace yesterday's. */
     @SuppressLint("MissingPermission")   // checked through canNotify()
     fun show(context: Context, plan: AlertPlan, warnDays: Int) {
@@ -47,11 +53,11 @@ object AlertNotifier {
                     " · " + context.getString(R.string.alert_cost_hint, Money(plan.expiringCostPaise).format()))
             }
             nm.notify(ID_EXPIRY, builder(context, open, context.getString(R.string.alert_title_expiry), lines).build())
-        }
+        } else nm.cancel(ID_EXPIRY)
         if (plan.hasLowStockAlert) {
             val line = res.getQuantityString(R.plurals.alert_low_stock, plan.lowStockProducts, plan.lowStockProducts)
             nm.notify(ID_LOW_STOCK, builder(context, open, context.getString(R.string.alert_title_low_stock), listOf(line)).build())
-        }
+        } else nm.cancel(ID_LOW_STOCK)
     }
 
     private fun builder(context: Context, open: PendingIntent, title: String, lines: List<String>) =

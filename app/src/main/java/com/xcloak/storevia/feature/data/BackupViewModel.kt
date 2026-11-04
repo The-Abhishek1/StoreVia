@@ -36,6 +36,29 @@ data class BackupUi(
     val confirmRestore: File? = null,
 )
 
+internal data class BackupProtection(val passphrase: String?)
+
+internal class PendingBackupProtection {
+    private var prepared = false
+    private var passphrase: String? = null
+
+    fun prepare(value: String?) {
+        passphrase = value
+        prepared = true
+    }
+
+    fun consume(): BackupProtection? {
+        if (!prepared) return null
+        prepared = false
+        return BackupProtection(passphrase).also { passphrase = null }
+    }
+
+    fun clear() {
+        prepared = false
+        passphrase = null
+    }
+}
+
 @HiltViewModel
 class BackupViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
@@ -51,13 +74,23 @@ class BackupViewModel @Inject constructor(
 
     /** Raw bytes of the file being restored, kept only while waiting for a passphrase. */
     private var pendingBytes: ByteArray? = null
+    private val pendingBackupProtection = PendingBackupProtection()
 
     init { refresh() }
 
     private fun refresh() = _ui.update { it.copy(lastManualAt = backups.lastManualBackupAt, autoBackups = backups.autoBackups()) }
     fun dismissMessage() = _ui.update { it.copy(message = null) }
 
-    fun backup(uri: Uri, passphrase: String?) = viewModelScope.launch {
+    fun prepareBackup(passphrase: String?) = pendingBackupProtection.prepare(passphrase)
+    fun cancelBackup() = pendingBackupProtection.clear()
+
+    fun backup(uri: Uri) = viewModelScope.launch {
+        val protection = pendingBackupProtection.consume()
+        if (protection == null) {
+            _ui.update { it.copy(message = R.string.backup_failed) }
+            return@launch
+        }
+        val passphrase = protection.passphrase
         if (!access.actor().can(Permission.BACKUP)) { _ui.update { it.copy(message = R.string.err_permission_denied) }; return@launch }
         _ui.update { it.copy(busy = true) }
         val ok = try {
@@ -107,7 +140,9 @@ class BackupViewModel @Inject constructor(
             return@launch
         }
         _ui.update { it.copy(busy = true) }
-        val bytes = try { withContext(Dispatchers.IO) { file.readBytes() } } catch (_: Exception) { null }
+        val bytes = try {
+            withContext(Dispatchers.IO) { file.inputStream().use { readCapped(it) } }
+        } catch (_: Exception) { null }
         if (bytes == null) { _ui.update { it.copy(busy = false, message = R.string.restore_read_failed) }; return@launch }
         check(bytes, null)
     }

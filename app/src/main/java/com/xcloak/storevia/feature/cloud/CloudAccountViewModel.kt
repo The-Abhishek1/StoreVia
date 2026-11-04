@@ -35,7 +35,7 @@ import java.security.MessageDigest
 import javax.inject.Inject
 
 data class CloudAccountUiState(
-    val email: String? = null,
+    val accountIdentifier: String? = null,
     val busy: Boolean = false,
     val message: String? = null,
     val plan: CloudPlanSnapshot? = null,
@@ -53,7 +53,7 @@ class CloudAccountViewModel @Inject constructor(
     private val cloud: CloudAccountRepository,
     private val prefs: AppPrefs,
 ) : ViewModel() {
-    private val _ui = MutableStateFlow(CloudAccountUiState(email = cloud.signedInEmail()))
+    private val _ui = MutableStateFlow(CloudAccountUiState(accountIdentifier = cloud.signedInIdentifier()))
     val ui: StateFlow<CloudAccountUiState> = _ui.asStateFlow()
     val settings = prefs.settings
     val isConfigured get() = cloud.isConfigured
@@ -71,9 +71,14 @@ class CloudAccountViewModel @Inject constructor(
     init {
         viewModelScope.launch {
             cloud.authSessionStatus.collect {
-                val email = cloud.signedInEmail()
-                _ui.update { it.copy(email = email, awaitingEmailConfirmation = if (email == null) it.awaitingEmailConfirmation else false) }
-                if (email != null) refreshPlan()
+                val identifier = cloud.signedInIdentifier()
+                _ui.update {
+                    it.copy(
+                        accountIdentifier = identifier,
+                        awaitingEmailConfirmation = if (identifier == null) it.awaitingEmailConfirmation else false,
+                    )
+                }
+                if (identifier != null) refreshPlan()
             }
         }
         refreshPlan()
@@ -239,9 +244,9 @@ class CloudAccountViewModel @Inject constructor(
             try {
                 if (createAccount) {
                 cloud.signUp(trimmedIdentifier, password)
-                    val signedIn = cloud.signedInEmail()
+                    val signedIn = cloud.signedInIdentifier()
                     _ui.value = CloudAccountUiState(
-                        email = signedIn,
+                        accountIdentifier = signedIn,
                         message = if (signedIn == null) "Account created. Verify your email, then sign in." else "Account created. Connect this store to continue.",
                         awaitingEmailConfirmation = signedIn == null,
                     )
@@ -249,12 +254,15 @@ class CloudAccountViewModel @Inject constructor(
                 } else {
                     if (isEmail) cloud.signIn(trimmedIdentifier, password)
                     else cloud.signInWithPhone(trimmedIdentifier, password)
-                    _ui.value = CloudAccountUiState(email = cloud.signedInEmail(), message = "Signed in. Connect this store to continue.")
+                    _ui.value = CloudAccountUiState(
+                        accountIdentifier = cloud.signedInIdentifier(),
+                        message = "Signed in. Connect this store to continue.",
+                    )
                     refreshPlan()
                 }
             } catch (e: Exception) {
                 _ui.value = CloudAccountUiState(
-                    email = cloud.signedInEmail(),
+                    accountIdentifier = cloud.signedInIdentifier(),
                     message = CloudAuthError.message(e)
                         ?: safeCloudError(
                             e,
@@ -318,9 +326,14 @@ class CloudAccountViewModel @Inject constructor(
     }
 
     fun refreshSession() {
-        val email = cloud.signedInEmail()
-        _ui.update { it.copy(email = email, awaitingEmailConfirmation = if (email == null) it.awaitingEmailConfirmation else false) }
-        if (email != null) refreshPlan()
+        val identifier = cloud.signedInIdentifier()
+        _ui.update {
+            it.copy(
+                accountIdentifier = identifier,
+                awaitingEmailConfirmation = if (identifier == null) it.awaitingEmailConfirmation else false,
+            )
+        }
+        if (identifier != null) refreshPlan()
     }
 
     fun clearMessageForAuthentication() {
@@ -339,7 +352,7 @@ class CloudAccountViewModel @Inject constructor(
             _ui.value = CloudAccountUiState(message = "Signed out. Local store data remains on this phone.")
         } catch (e: Exception) {
             _ui.value = CloudAccountUiState(
-                email = cloud.signedInEmail(),
+                accountIdentifier = cloud.signedInIdentifier(),
                 message = safeCloudError(e, "Could not sign out. Try again."),
             )
         }
@@ -353,7 +366,7 @@ class CloudAccountViewModel @Inject constructor(
             val plan = cloud.planSnapshot()
             val isPlatformAdmin = cloud.isPlatformAdmin()
             _ui.value = CloudAccountUiState(
-                email = cloud.signedInEmail(),
+                accountIdentifier = cloud.signedInIdentifier(),
                 message = "Sync complete · ${result.pushed} sent · ${result.pulled} received",
                 plan = plan,
                 platformAdmin = isPlatformAdmin,
@@ -361,7 +374,7 @@ class CloudAccountViewModel @Inject constructor(
             refreshExistingPurchases()
         } catch (e: Exception) {
             _ui.value = CloudAccountUiState(
-                email = cloud.signedInEmail(),
+                accountIdentifier = cloud.signedInIdentifier(),
                 message = safeCloudError(e, "Cloud operation failed. Check your connection and try again."),
             )
         }

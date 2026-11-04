@@ -4,11 +4,14 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.xcloak.storevia.R
+import com.xcloak.storevia.core.access.Permission
+import com.xcloak.storevia.core.access.StaffSession
 import com.xcloak.storevia.core.database.dao.ProductDao
 import com.xcloak.storevia.core.database.dao.ProductListRow
 import com.xcloak.storevia.core.database.dao.BranchDao
 import com.xcloak.storevia.core.database.dao.SupplierDao
 import com.xcloak.storevia.core.database.dao.UnitDao
+import com.xcloak.storevia.core.database.dao.observeActiveBranchId
 import com.xcloak.storevia.core.database.entity.PaymentMethod
 import com.xcloak.storevia.core.database.entity.SupplierEntity
 import com.xcloak.storevia.core.money.Money
@@ -94,6 +97,7 @@ class PurchaseEditViewModel @Inject constructor(
     branchDao: BranchDao,
     private val recordPurchase: RecordPurchaseUseCase,
     prefs: AppPrefs,
+    private val session: StaffSession,
 ) : ViewModel() {
 
     private val _ui = MutableStateFlow(PurchaseUi())
@@ -101,21 +105,32 @@ class PurchaseEditViewModel @Inject constructor(
 
     val features: StateFlow<StoreFeatureSet> = prefs.settings.map { StoreTypeConfig.of(it.storeType) }
         .stateIn(viewModelScope, SharingStarted.Eagerly, StoreTypeConfig.of(prefs.settings.value.storeType))
+    val canManage: StateFlow<Boolean> = session.actorState
+        .map { it.can(Permission.MANAGE_PURCHASES) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, session.actor().can(Permission.MANAGE_PURCHASES))
 
     private val _events = Channel<PurchaseEvent>(Channel.BUFFERED)
     val events = _events.receiveAsFlow()
 
-    val suppliers: StateFlow<List<SupplierEntity>> =
-        supplierDao.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
-
-    private val activeBranchId = branchDao.observeSelectedId().map { it ?: "default" }.distinctUntilChanged()
-
-    val results: StateFlow<List<ProductListRow>> = combine(_ui.map { it.query.trim() }.distinctUntilChanged(), activeBranchId) { q, branchId ->
-        q to branchId
-    }.flatMapLatest { (q, branchId) ->
-        if (q.isEmpty()) flowOf(emptyList()) else productDao.listWithStock(q, branchId).map { it.take(8) }
-    }
+    val suppliers: StateFlow<List<SupplierEntity>> = canManage
+        .flatMapLatest { allowed -> if (allowed) supplierDao.observeAll() else flowOf(emptyList<SupplierEntity>()) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    private val activeBranchId = branchDao.observeActiveBranchId()
+
+    val results: StateFlow<List<ProductListRow>> = combine(
+        _ui.map { it.query.trim() }.distinctUntilChanged(),
+        activeBranchId,
+        canManage,
+    ) { q, branchId, allowed -> SearchFilter(q, branchId, allowed) }
+        .flatMapLatest { filter ->
+            if (filter.query.isEmpty() || filter.branchId == null || !filter.allowed) flowOf(emptyList<ProductListRow>())
+            else productDao.listWithStock(filter.query, filter.branchId).map { it.take(8) }
+        }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    private data class SearchFilter(val query: String, val branchId: String?, val allowed: Boolean)
+
 
     init {
         handle.get<String>("supplierId")?.let { id -> viewModelScope.launch { supplierDao.getById(id)?.let { s -> _ui.update { it.copy(supplier = s) } } } }
@@ -144,13 +159,14 @@ class PurchaseEditViewModel @Inject constructor(
     fun removeLine(id: String) = edit { copy(lines = lines.filterNot { it.lineId == id }) }
 
     fun addSupplier(name: String) {
-        if (name.isBlank()) return
+        if (!canManage.value || name.isBlank()) return
         viewModelScope.launch {
             val s = SupplierEntity(name = name.trim()); supplierDao.insert(s); setSupplier(s)
         }
     }
 
     fun addProduct(productId: String) = viewModelScope.launch {
+        if (!canManage.value) return@launch
         val p = productDao.getById(productId) ?: return@launch
         val unit = unitDao.getById(p.unitId)
         val pack = try {
@@ -162,7 +178,7 @@ class PurchaseEditViewModel @Inject constructor(
         val line = PurchaseLineUi(
             productId = p.id, name = listOfNotNull(p.name, p.variantLabel).joinToString(" · "),
             unitSymbol = unit?.symbol.orEmpty(), allowDecimal = unit?.allowDecimal ?: false,
-            trackExpiry = p.trackExpiry && features.value.supportsExpiryTracking,
+            trackExpiry = p.trackExpiry,
             serialTracked = p.serialTracked,
             qtyMilli = 1000, unitCostPaise = p.costPaise, baseUnitSymbol = unit?.symbol.orEmpty(),
             baseAllowDecimal = unit?.allowDecimal ?: false, packUnitSymbol = pack?.name, packSizeMilli = pack?.baseUnitsPerPackMilli)
@@ -202,7 +218,7 @@ class PurchaseEditViewModel @Inject constructor(
                     allowDecimal = if (usingPackUnit) false else it.baseAllowDecimal,
                     usingPackUnit = usingPackUnit,
                     batchNo = batchNo.trim().ifEmpty { null }.takeIf { features.value.supportsBatchTracking },
-                    expiry = expiry.takeIf { features.value.supportsExpiryTracking },
+                    expiry = expiry.takeIf { features.value.supportsExpiryTracking || line.trackExpiry },
                     serialNumbersText = serialNumbersText,
                 ) else it
             })
@@ -211,6 +227,7 @@ class PurchaseEditViewModel @Inject constructor(
     }
 
     fun save() {
+        if (!canManage.value) { fail(R.string.err_permission_denied); return }
         val s = _ui.value
         if (s.saving) return
         if (s.lines.isEmpty()) { fail(R.string.err_no_lines); return }
@@ -235,8 +252,10 @@ class PurchaseEditViewModel @Inject constructor(
                 when (e.reason) {
                     PurchaseException.Reason.PAID_EXCEEDS_TOTAL -> fail(R.string.err_paid_exceeds_purchase)
                     PurchaseException.Reason.SUPPLIER_REQUIRED_FOR_CREDIT -> fail(R.string.err_supplier_for_credit)
+                    PurchaseException.Reason.SUPPLIER_NOT_FOUND -> fail(R.string.err_supplier_not_found)
                     PurchaseException.Reason.EXPIRY_REQUIRED -> fail(R.string.err_expiry_required_for, e.detail)
                     PurchaseException.Reason.NO_LINES -> fail(R.string.err_no_lines)
+                    PurchaseException.Reason.BRANCH_REQUIRED -> fail(R.string.err_branch_required)
                     PurchaseException.Reason.SERIAL_COUNT -> fail(R.string.err_serial_count)
                     PurchaseException.Reason.SERIAL_DUPLICATE -> fail(R.string.err_serial_duplicate)
                     else -> fail(R.string.err_amount_invalid)

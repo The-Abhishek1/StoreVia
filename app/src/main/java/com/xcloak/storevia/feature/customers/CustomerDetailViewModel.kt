@@ -17,7 +17,6 @@ import com.xcloak.storevia.domain.customer.KhataException
 import com.xcloak.storevia.domain.customer.ReceivePaymentUseCase
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
-import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 data class LedgerRow(val entry: CustomerLedgerEntity, val runningPaise: Long)
@@ -32,6 +31,8 @@ data class CustomerDetailUi(
     val reminderText: String get() = KhataText.reminder(storeName, customer.name, balancePaise)
 }
 
+data class CustomerDetailState(val loaded: Boolean = false, val detail: CustomerDetailUi? = null)
+
 @HiltViewModel
 class CustomerDetailViewModel @Inject constructor(
     handle: SavedStateHandle,
@@ -44,15 +45,18 @@ class CustomerDetailViewModel @Inject constructor(
 
     private val id: String = checkNotNull(handle["id"])
 
-    val ui: StateFlow<CustomerDetailUi?> = combine(
+    val ui: StateFlow<CustomerDetailState> = combine(
         customerDao.observeById(id), customerDao.observeLedger(id), storeDao.observe(),
     ) { customer, ledger, store ->
-        if (customer == null) null else {
+        if (customer == null) CustomerDetailState(loaded = true) else {
             var running = 0L
             val rows = ledger.map { e -> running += e.amountPaise; LedgerRow(e, running) }
-            CustomerDetailUi(customer, running, rows.asReversed(), store?.name.orEmpty())
+            CustomerDetailState(
+                loaded = true,
+                detail = CustomerDetailUi(customer, running, rows.asReversed(), store?.name.orEmpty()),
+            )
         }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), CustomerDetailState())
 
     /** @return a string-resource id for the problem, or null on success. */
     suspend fun receive(amountText: String, method: PaymentMethod): Int? {
@@ -64,6 +68,7 @@ class CustomerDetailViewModel @Inject constructor(
             when (e.reason) {
                 KhataException.Reason.EXCEEDS_BALANCE -> R.string.err_exceeds_balance
                 KhataException.Reason.INVALID_AMOUNT -> R.string.err_amount_positive
+                KhataException.Reason.CUSTOMER_NOT_FOUND -> R.string.customer_unavailable
             }
         } catch (e: PermissionDeniedException) {
             R.string.err_permission_denied
@@ -73,30 +78,37 @@ class CustomerDetailViewModel @Inject constructor(
     suspend fun addOldBalance(amountText: String): Int? {
         val amount = Parsing.moneyToPaise(amountText) ?: return R.string.err_amount_invalid
         if (amount <= 0) return R.string.err_amount_positive
-        if (!access.actor().can(Permission.EDIT_CREDIT_LIMIT)) return R.string.err_permission_denied
+        if (!access.actor().can(Permission.MANAGE_CUSTOMERS) ||
+            !access.actor().can(Permission.EDIT_CREDIT_LIMIT)
+        ) return R.string.err_permission_denied
+        val customer = customerDao.getById(id) ?: return R.string.customer_unavailable
+        if (!access.actor().can(Permission.MANAGE_CUSTOMERS) ||
+            !access.actor().can(Permission.EDIT_CREDIT_LIMIT)
+        ) return R.string.err_permission_denied
         customerDao.insertLedger(
             CustomerLedgerEntity(customerId = id, type = LedgerType.ADJUSTMENT, amountPaise = amount, refType = "MANUAL")
         )
-        audit.log(AuditAction.OLD_BALANCE_ADDED, "Old balance ${Money(amount).format()} added for ${ui.value?.customer?.name ?: "customer"}", "CUSTOMER", id)
+        audit.log(AuditAction.OLD_BALANCE_ADDED, "Old balance ${Money(amount).format()} added for ${customer.name}", "CUSTOMER", id)
         return null
     }
 
     /** @return false if the credit limit text is invalid. */
-    fun update(name: String, phone: String, limitText: String): Boolean {
-        val current = ui.value?.customer ?: return false
+    suspend fun update(name: String, phone: String, limitText: String): Boolean {
+        if (!access.actor().can(Permission.MANAGE_CUSTOMERS)) return false
+        val current = ui.value.detail?.customer ?: return false
         val limit = if (limitText.isBlank()) null else (Parsing.moneyToPaise(limitText) ?: return false)
-        val limitChanged = limit != current.creditLimitPaise
+        val fresh = customerDao.getById(current.id) ?: return false
+        if (!access.actor().can(Permission.MANAGE_CUSTOMERS)) return false
+        val limitChanged = limit != fresh.creditLimitPaise
         if (limitChanged && !access.actor().can(Permission.EDIT_CREDIT_LIMIT)) return false
-        viewModelScope.launch {
-            if (limitChanged) audit.log(AuditAction.CREDIT_LIMIT_CHANGED,
-                "${current.name}: credit limit ${current.creditLimitPaise?.let { Money(it).format() } ?: "none"} -> ${limit?.let { Money(it).format() } ?: "none"}", "CUSTOMER", current.id)
-            customerDao.update(
-                current.copy(
-                    name = name.trim(), phone = phone.trim().ifEmpty { null }, creditLimitPaise = limit,
-                    updatedAt = System.currentTimeMillis(), dirty = true,
-                )
+        if (limitChanged) audit.log(AuditAction.CREDIT_LIMIT_CHANGED,
+            "${fresh.name}: credit limit ${fresh.creditLimitPaise?.let { Money(it).format() } ?: "none"} -> ${limit?.let { Money(it).format() } ?: "none"}", "CUSTOMER", fresh.id)
+        customerDao.update(
+            fresh.copy(
+                name = name.trim(), phone = phone.trim().ifEmpty { null }, creditLimitPaise = limit,
+                updatedAt = System.currentTimeMillis(), dirty = true,
             )
-        }
+        )
         return true
     }
 }

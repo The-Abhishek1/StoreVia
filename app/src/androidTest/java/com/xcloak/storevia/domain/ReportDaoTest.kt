@@ -6,11 +6,14 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.xcloak.storevia.core.database.StorviaDatabase
 import com.xcloak.storevia.core.database.entity.*
+import com.xcloak.storevia.data.alerts.resolveAlertBranchId
 import com.xcloak.storevia.domain.sale.*
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -95,6 +98,26 @@ class ReportDaoTest {
         assertEquals(0, allBranches.size)
     }
 
+    @Test fun reorderRowsExcludeNonSellableVariantTemplates() = runBlocking {
+        val unitId = db.unitDao().observeAll().first().single().id
+        val parent = ProductEntity(name = "Tee", unitId = unitId, sellPricePaise = 1000, minStockMilli = 1000)
+        val child = ProductEntity(
+            name = "Tee",
+            parentProductId = parent.id,
+            variantLabel = "Small",
+            unitId = parent.unitId,
+            sellPricePaise = 1000,
+            minStockMilli = 1000,
+        )
+        db.productDao().insert(parent)
+        db.productDao().insert(child)
+
+        val rows = db.reportDao().reorderRows("default").first()
+
+        assertFalse(rows.any { it.productId == parent.id })
+        assertTrue(rows.any { it.productId == child.id })
+    }
+
     @Test fun stockProductRowsShowOnlyTheSelectedBranchQuantity() = runBlocking {
         val dao = db.productDao()
         val main = dao.listWithStock("", "default").first().single()
@@ -163,5 +186,16 @@ class ReportDaoTest {
         assertEquals(1, mainReport.bills)
         assertEquals(1, secondReport.bills)
         assertEquals(700L, secondReport.grossPaise)
+    }
+
+    @Test fun alertBranchResolutionNeverFallsBackToAnUnconfiguredDefault() = runBlocking {
+        val branches = db.branchDao()
+        assertEquals("default", resolveAlertBranchId(branches))
+
+        branches.softDelete("default", System.currentTimeMillis())
+        assertEquals("branch-2", resolveAlertBranchId(branches))
+
+        branches.softDelete("branch-2", System.currentTimeMillis())
+        assertEquals(null, resolveAlertBranchId(branches))
     }
 }

@@ -54,6 +54,7 @@ fun CheckoutScreen(
     val canPrice = can(Permission.OVERRIDE_PRICE)
     val canCredit = can(Permission.SELL_ON_CREDIT)
     val canOverrideBatch = can(Permission.OVERRIDE_BATCH)
+    val canManageCustomers = can(Permission.MANAGE_CUSTOMERS)
     var qtyFor by remember { mutableStateOf<CartLine?>(null) }
     var discountFor by remember { mutableStateOf<CartLine?>(null) }
     var priceFor by remember { mutableStateOf<CartLine?>(null) }
@@ -124,7 +125,7 @@ fun CheckoutScreen(
     }
     if (billDiscount) BillDiscountDialog(onConfirm = { t, pct -> vm.setBillDiscount(t, pct); billDiscount = false }, onDismiss = { billDiscount = false })
     if (pickCustomer) {
-        CustomerPicker(customers, onPick = { vm.setCustomer(it); pickCustomer = false }, onAdd = { n, p -> vm.addCustomer(n, p); pickCustomer = false },
+        CustomerPicker(customers, canAdd = canManageCustomers, onPick = { vm.setCustomer(it); pickCustomer = false }, onAdd = { n, p -> vm.addCustomer(n, p); pickCustomer = false },
             onDismiss = { pickCustomer = false })
     }
     if (showHeld) HeldDialog(held, onResume = { vm.resume(it); showHeld = false }, onDelete = vm::deleteHeld, onDismiss = { showHeld = false })
@@ -408,7 +409,7 @@ private fun HeldDialog(held: List<HeldCartEntity>, onResume: (String) -> Unit, o
 
 @Composable
 private fun CustomerPicker(
-    customers: List<CustomerEntity>, onPick: (CustomerEntity?) -> Unit, onAdd: (String, String) -> Unit, onDismiss: () -> Unit,
+    customers: List<CustomerEntity>, canAdd: Boolean, onPick: (CustomerEntity?) -> Unit, onAdd: (String, String) -> Unit, onDismiss: () -> Unit,
 ) {
     var adding by remember { mutableStateOf(false) }
     var name by remember { mutableStateOf("") }
@@ -433,8 +434,11 @@ private fun CustomerPicker(
             }
         },
         confirmButton = {
-            if (adding) TextButton(onClick = { onAdd(name, phone) }, enabled = name.isNotBlank()) { Text(stringResource(R.string.save)) }
-            else TextButton(onClick = { adding = true }) { Text(stringResource(R.string.add_customer)) }
+            if (adding && canAdd) {
+                TextButton(onClick = { onAdd(name, phone) }, enabled = name.isNotBlank()) { Text(stringResource(R.string.save)) }
+            } else if (!adding && canAdd) {
+                TextButton(onClick = { adding = true }) { Text(stringResource(R.string.add_customer)) }
+            }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
     )

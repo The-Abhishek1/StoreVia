@@ -22,6 +22,7 @@ import com.xcloak.storevia.R
 import com.xcloak.storevia.core.access.Role
 import com.xcloak.storevia.core.database.entity.StaffEntity
 import com.xcloak.storevia.core.ui.LoadingState
+import com.xcloak.storevia.data.staff.PinPolicy
 import kotlinx.coroutines.launch
 
 @Composable
@@ -187,6 +188,21 @@ private fun EditStaffDialog(s: StaffEntity, vm: StaffViewModel, onDismiss: () ->
         confirmButton = {
             TextButton(onClick = {
                 scope.launch {
+                    if (pin.isNotEmpty()) {
+                        val pinError = when {
+                            pin != again -> R.string.err_pin_mismatch
+                            else -> when (PinPolicy.validate(pin)) {
+                                PinPolicy.Result.OK -> null
+                                PinPolicy.Result.BAD_LENGTH -> R.string.err_pin_length
+                                PinPolicy.Result.NOT_DIGITS -> R.string.err_pin_digits
+                                PinPolicy.Result.TOO_SIMPLE -> R.string.err_pin_simple
+                            }
+                        }
+                        if (pinError != null) {
+                            error = pinError
+                            return@launch
+                        }
+                    }
                     var e = vm.update(s.id, name, role, active)
                     if (e == null && pin.isNotEmpty()) e = vm.resetPin(s.id, pin, again)
                     if (e == null) onDismiss() else error = e

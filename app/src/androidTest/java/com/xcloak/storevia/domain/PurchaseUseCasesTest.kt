@@ -36,6 +36,8 @@ class PurchaseUseCasesTest {
         purchase = RecordPurchaseUseCase(db, db.productDao(), db.batchDao(), db.stockMovementDao(), db.purchaseDao(), db.supplierDao())
         paySupplier = PaySupplierUseCase(db, db.supplierDao())
         db.storeDao().upsert(StoreEntity(name = "Test"))
+        db.branchDao().insert(BranchEntity(id = "default", name = "Main", selectedOnDevice = true))
+        db.branchDao().insert(BranchEntity(id = "branch-2", name = "Second"))
         val unit = UnitEntity(name = "Piece", symbol = "pcs", allowDecimal = false)
         db.unitDao().insertAll(listOf(unit))
         product = ProductEntity(name = "Biscuits", unitId = unit.id, sellPricePaise = 1000, costPaise = 500)
@@ -119,5 +121,53 @@ class PurchaseUseCasesTest {
             assertEquals(PurchaseException.Reason.SERIAL_COUNT, e.reason)
         }
         assertEquals(2_000L, db.stockMovementDao().ledgerTotal(device.id))
+    }
+
+    @Test fun purchaseRowsAreScopedToTheirBranch() = runBlocking {
+        val mainId = buy(PurchaseItem(product.id, 1_000, 500))
+        val otherId = "other-branch-purchase"
+        db.purchaseDao().insert(
+            PurchaseEntity(
+                id = otherId,
+                branchId = "branch-2",
+                supplierId = supplier.id,
+                invoiceNo = "OTHER",
+                purchaseDate = dayMillis + 1,
+                totalPaise = 900,
+                paidPaise = 0,
+            ),
+        )
+
+        val mainRows = db.purchaseDao().observeRecent(branchId = "default").first()
+        val otherRows = db.purchaseDao().observeRecent(branchId = "branch-2").first()
+
+        assertEquals(listOf(mainId), mainRows.map { it.id })
+        assertEquals(listOf(otherId), otherRows.map { it.id })
+        assertNotNull(db.purchaseDao().observeById(mainId, "default").first())
+        assertNull(db.purchaseDao().observeById(mainId, "branch-2").first())
+        assertTrue(db.purchaseDao().observeLines(mainId, "branch-2").first().isEmpty())
+    }
+
+    @Test fun purchaseIsRejectedWhenNoBranchExists() = runBlocking {
+        db.branchDao().softDelete("default", dayMillis)
+        db.branchDao().softDelete("branch-2", dayMillis)
+
+        try {
+            buy(PurchaseItem(product.id, 1_000, 500))
+            fail("expected PurchaseException")
+        } catch (e: PurchaseException) {
+            assertEquals(PurchaseException.Reason.BRANCH_REQUIRED, e.reason)
+        }
+        assertEquals(0L, db.stockMovementDao().ledgerTotal(product.id))
+    }
+
+    @Test fun purchaseRejectsAMissingSupplierWithoutRecordingStock() = runBlocking {
+        try {
+            buy(PurchaseItem(product.id, 1_000, 500), supplierId = "missing-supplier", paid = 500)
+            fail("expected PurchaseException")
+        } catch (e: PurchaseException) {
+            assertEquals(PurchaseException.Reason.SUPPLIER_NOT_FOUND, e.reason)
+        }
+        assertEquals(0L, db.stockMovementDao().ledgerTotal(product.id))
     }
 }

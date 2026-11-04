@@ -92,35 +92,83 @@ class BackupManager @Inject constructor(
         }
         if (bytes.size < 4 || bytes[0] != 'P'.code.toByte() || bytes[1] != 'K'.code.toByte()) return@withContext RestoreCheck.NotABackup
 
-        var manifest: String? = null
         val staged = File(context.cacheDir, "restore-staging.db").also { it.delete() }
+        var keepStaged = false
         try {
+            var manifest: String? = null
+            var hasDatabase = false
             ZipInputStream(bytes.inputStream()).use { z ->
-                var e = z.nextEntry
-                while (e != null) {
-                    // Only two known entry names are read, so a crafted ZIP can't write elsewhere (zip-slip).
-                    when (e.name) {
-                        MANIFEST -> manifest = z.readBytes().toString(Charsets.UTF_8)
-                        DB_ENTRY -> staged.outputStream().use { z.copyTo(it) }
+                while (true) {
+                    val entry = z.nextEntry ?: break
+                    when (entry.name) {
+                        MANIFEST -> {
+                            if (manifest != null || entry.size > MAX_MANIFEST_BYTES) return@withContext RestoreCheck.Corrupt
+                            val output = ByteArrayOutputStream()
+                            if (copyEntryCapped(z, output, MAX_MANIFEST_BYTES) == null) return@withContext RestoreCheck.Corrupt
+                            manifest = output.toByteArray().toString(Charsets.UTF_8)
+                        }
+                        DB_ENTRY -> {
+                            if (hasDatabase || entry.size > MAX_BACKUP_BYTES) return@withContext RestoreCheck.Corrupt
+                            val copied = staged.outputStream().use { copyEntryCapped(z, it, MAX_BACKUP_BYTES) }
+                                ?: return@withContext RestoreCheck.Corrupt
+                            if (copied == 0L) return@withContext RestoreCheck.Corrupt
+                            hasDatabase = true
+                        }
+                        else -> return@withContext RestoreCheck.NotABackup
                     }
-                    e = z.nextEntry
+                    z.closeEntry()
                 }
             }
-        } catch (_: Exception) { return@withContext RestoreCheck.NotABackup }
 
-        val m = manifest
-        if (m == null || !staged.exists() || !m.contains("\"app\":\"storevia\"")) return@withContext RestoreCheck.NotABackup
-        val version = Regex("\"dbVersion\":(\\d+)").find(m)?.groupValues?.get(1)?.toIntOrNull() ?: return@withContext RestoreCheck.NotABackup
-        if (version > db.openHelper.readableDatabase.version) return@withContext RestoreCheck.TooNew
-
-        val healthy = try {
-            SQLiteDatabase.openDatabase(staged.path, null, SQLiteDatabase.OPEN_READONLY).use { check ->
-                val integrity = check.rawQuery("PRAGMA integrity_check", null).use { c -> c.moveToFirst() && c.getString(0) == "ok" }
-                val hasStore = check.rawQuery("SELECT name FROM sqlite_master WHERE type='table' AND name='store'", null).use { it.moveToFirst() }
-                integrity && hasStore
+            val m = manifest
+            if (m == null || !hasDatabase || !staged.exists() || !m.contains("\"app\":\"storevia\"")) {
+                return@withContext RestoreCheck.NotABackup
             }
-        } catch (_: Exception) { false }
-        if (healthy) RestoreCheck.Ok(staged) else RestoreCheck.Corrupt
+            val version = Regex("\"dbVersion\":(\\d+)").find(m)?.groupValues?.get(1)?.toIntOrNull()
+                ?: return@withContext RestoreCheck.NotABackup
+            val supportedVersion = db.openHelper.readableDatabase.version
+            if (version > supportedVersion) return@withContext RestoreCheck.TooNew
+
+            val result = try {
+                SQLiteDatabase.openDatabase(staged.path, null, SQLiteDatabase.OPEN_READONLY).use { check ->
+                    when {
+                        check.version > supportedVersion -> RestoreCheck.TooNew
+                        check.version != version -> RestoreCheck.Corrupt
+                        else -> {
+                            val integrity = check.rawQuery("PRAGMA integrity_check", null)
+                                .use { c -> c.moveToFirst() && c.getString(0) == "ok" }
+                            val hasStore = check.rawQuery(
+                                "SELECT name FROM sqlite_master WHERE type='table' AND name='store'",
+                                null,
+                            ).use { it.moveToFirst() }
+                            if (integrity && hasStore) RestoreCheck.Ok(staged) else RestoreCheck.Corrupt
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+                RestoreCheck.Corrupt
+            }
+            if (result is RestoreCheck.Ok) {
+                keepStaged = true
+            }
+            result
+        } catch (_: Exception) {
+            RestoreCheck.NotABackup
+        } finally {
+            if (!keepStaged) staged.delete()
+        }
+    }
+
+    private fun copyEntryCapped(input: ZipInputStream, output: OutputStream, limit: Long): Long? {
+        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+        var copied = 0L
+        while (true) {
+            val count = input.read(buffer)
+            if (count < 0) return copied
+            copied += count
+            if (copied > limit) return null
+            output.write(buffer, 0, count)
+        }
     }
 
     /** Swaps the staged database in. The caller must restart the app straight after. */
@@ -146,5 +194,7 @@ class BackupManager @Inject constructor(
         const val DB_NAME = "storevia.db"
         private const val MANIFEST = "manifest.json"
         private const val DB_ENTRY = "storevia.db"
+        private const val MAX_MANIFEST_BYTES = 64 * 1024L
+        private const val MAX_BACKUP_BYTES = 200 * 1024 * 1024L
     }
 }

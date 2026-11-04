@@ -36,21 +36,35 @@ private val DATE = DateTimeFormatter.ofPattern("d MMM yyyy")
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun CustomerDetailScreen(onBack: () -> Unit, onOpenSale: (String) -> Unit, vm: CustomerDetailViewModel = hiltViewModel()) {
-    val ui by vm.ui.collectAsStateWithLifecycle()
+    val state by vm.ui.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var paying by remember { mutableStateOf(false) }
     var oldBalance by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf(false) }
-    val d = ui
+    val d = state.detail
 
     Column(Modifier.fillMaxSize()) {
         TopAppBar(
             title = { Text(d?.customer?.name.orEmpty(), maxLines = 1) },
             navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.back)) } },
-            actions = { if (d != null) IconButton(onClick = { editing = true }) { Icon(Icons.Filled.Edit, stringResource(R.string.edit)) } },
+            actions = {
+                if (d != null && can(Permission.MANAGE_CUSTOMERS)) {
+                    IconButton(onClick = { editing = true }) { Icon(Icons.Filled.Edit, stringResource(R.string.edit)) }
+                }
+            },
         )
-        if (d == null) {
+        if (!state.loaded) {
             LoadingState(Modifier.weight(1f).fillMaxWidth())
+            return@Column
+        }
+        if (d == null) {
+            Column(
+                Modifier.weight(1f).fillMaxWidth().padding(24.dp),
+                verticalArrangement = Arrangement.Center,
+            ) {
+                Text(stringResource(R.string.customer_unavailable), style = MaterialTheme.typography.titleMedium)
+                TextButton(onClick = onBack) { Text(stringResource(R.string.back)) }
+            }
             return@Column
         }
 
@@ -63,8 +77,10 @@ fun CustomerDetailScreen(onBack: () -> Unit, onOpenSale: (String) -> Unit, vm: C
             d.customer.phone?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { paying = true }, enabled = d.balancePaise > 0, modifier = Modifier.weight(1f)) {
-                    Text(stringResource(R.string.receive_payment))
+                if (can(Permission.RECEIVE_KHATA_PAYMENT)) {
+                    Button(onClick = { paying = true }, enabled = d.balancePaise > 0, modifier = Modifier.weight(1f)) {
+                        Text(stringResource(R.string.receive_payment))
+                    }
                 }
                 OutlinedButton(
                     enabled = d.balancePaise > 0, modifier = Modifier.weight(1f),
@@ -74,7 +90,9 @@ fun CustomerDetailScreen(onBack: () -> Unit, onOpenSale: (String) -> Unit, vm: C
                     },
                 ) { Text(stringResource(R.string.send_reminder)) }
             }
-            if (can(Permission.EDIT_CREDIT_LIMIT)) TextButton(onClick = { oldBalance = true }) { Text(stringResource(R.string.add_old_balance)) }
+            if (can(Permission.MANAGE_CUSTOMERS) && can(Permission.EDIT_CREDIT_LIMIT)) {
+                TextButton(onClick = { oldBalance = true }) { Text(stringResource(R.string.add_old_balance)) }
+            }
             Text(stringResource(R.string.ledger_title), style = MaterialTheme.typography.titleMedium)
         }
 
@@ -112,7 +130,9 @@ fun CustomerDetailScreen(onBack: () -> Unit, onOpenSale: (String) -> Unit, vm: C
 
     if (paying && d != null) PaymentDialog(d.balancePaise, vm) { paying = false }
     if (oldBalance) OldBalanceDialog(vm) { oldBalance = false }
-    if (editing && d != null) CustomerFormDialog(d.customer, canEditLimit = can(Permission.EDIT_CREDIT_LIMIT), onSave = { n, p, l -> vm.update(n, p, l) }, onDismiss = { editing = false })
+    if (editing && d != null && can(Permission.MANAGE_CUSTOMERS)) {
+        CustomerFormDialog(d.customer, canEditLimit = can(Permission.EDIT_CREDIT_LIMIT), onSave = { n, p, l -> vm.update(n, p, l) }, onDismiss = { editing = false })
+    }
 }
 
 @Composable
@@ -120,10 +140,11 @@ private fun PaymentDialog(balancePaise: Long, vm: CustomerDetailViewModel, onDis
     var amount by remember { mutableStateOf(Parsing.paiseToInput(balancePaise)) }
     var method by remember { mutableStateOf(PaymentMethod.CASH) }
     var error by remember { mutableStateOf<Int?>(null) }
+    var saving by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!saving) onDismiss() },
         title = { Text(stringResource(R.string.receive_payment)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -137,11 +158,26 @@ private fun PaymentDialog(balancePaise: Long, vm: CustomerDetailViewModel, onDis
             }
         },
         confirmButton = {
-            TextButton(onClick = { scope.launch { val e = vm.receive(amount, method); if (e == null) onDismiss() else error = e } }) {
+            TextButton(
+                enabled = !saving,
+                onClick = {
+                    if (!saving) {
+                        saving = true
+                        scope.launch {
+                            try {
+                                val e = vm.receive(amount, method)
+                                if (e == null) onDismiss() else error = e
+                            } finally {
+                                saving = false
+                            }
+                        }
+                    }
+                },
+            ) {
                 Text(stringResource(R.string.save))
             }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !saving) { Text(stringResource(R.string.cancel)) } },
     )
 }
 
@@ -149,10 +185,11 @@ private fun PaymentDialog(balancePaise: Long, vm: CustomerDetailViewModel, onDis
 private fun OldBalanceDialog(vm: CustomerDetailViewModel, onDismiss: () -> Unit) {
     var amount by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<Int?>(null) }
+    var saving by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     AlertDialog(
-        onDismissRequest = onDismiss,
+        onDismissRequest = { if (!saving) onDismiss() },
         title = { Text(stringResource(R.string.add_old_balance)) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -163,10 +200,25 @@ private fun OldBalanceDialog(vm: CustomerDetailViewModel, onDismiss: () -> Unit)
             }
         },
         confirmButton = {
-            TextButton(onClick = { scope.launch { val e = vm.addOldBalance(amount); if (e == null) onDismiss() else error = e } }) {
+            TextButton(
+                enabled = !saving,
+                onClick = {
+                    if (!saving) {
+                        saving = true
+                        scope.launch {
+                            try {
+                                val e = vm.addOldBalance(amount)
+                                if (e == null) onDismiss() else error = e
+                            } finally {
+                                saving = false
+                            }
+                        }
+                    }
+                },
+            ) {
                 Text(stringResource(R.string.save))
             }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
+        dismissButton = { TextButton(onClick = onDismiss, enabled = !saving) { Text(stringResource(R.string.cancel)) } },
     )
 }

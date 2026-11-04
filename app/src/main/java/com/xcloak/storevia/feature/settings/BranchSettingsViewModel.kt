@@ -52,6 +52,8 @@ class BranchSettingsViewModel @Inject constructor(
         }
         if (branchDao.selectOnDevice(id, System.currentTimeMillis()) == 0) {
             input.update { it.copy(error = R.string.branch_not_found) }
+        } else {
+            input.update { it.copy(error = null) }
         }
     }
 

@@ -124,6 +124,7 @@ class CheckoutViewModel @Inject constructor(
     private val heldCartDao: HeldCartDao,
     private val branchDao: BranchDao,
     private val sale: CompleteSaleUseCase,
+    private val access: Access,
 ) : ViewModel() {
 
     private val _ui = MutableStateFlow(CheckoutUi())
@@ -291,8 +292,9 @@ class CheckoutViewModel @Inject constructor(
     fun setCustomer(c: CustomerEntity?) = _ui.update { it.copy(customer = c, message = null) }
 
     fun addCustomer(name: String, phone: String) {
-        if (name.isBlank()) return
+        if (name.isBlank() || !access.actor().can(Permission.MANAGE_CUSTOMERS)) return
         viewModelScope.launch {
+            if (!access.actor().can(Permission.MANAGE_CUSTOMERS)) return@launch
             val c = CustomerEntity(name = name.trim(), phone = phone.trim().ifEmpty { null })
             customerDao.insert(c)
             setCustomer(c)

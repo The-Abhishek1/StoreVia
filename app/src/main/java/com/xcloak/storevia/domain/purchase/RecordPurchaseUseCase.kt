@@ -4,7 +4,6 @@ import androidx.room.withTransaction
 import com.xcloak.storevia.core.access.*
 import com.xcloak.storevia.core.database.StorviaDatabase
 import com.xcloak.storevia.core.database.dao.*
-import com.xcloak.storevia.core.database.dao.activeBranchId
 import com.xcloak.storevia.core.database.entity.*
 import com.xcloak.storevia.core.money.Money
 import java.time.LocalDate
@@ -22,7 +21,7 @@ data class PurchaseItem(
 class PurchaseException(val reason: Reason, val detail: String? = null) : Exception(reason.name) {
     enum class Reason {
         NO_LINES, INVALID_QTY, INVALID_COST, PRODUCT_NOT_FOUND, EXPIRY_REQUIRED, INVALID_TOTAL,
-        PAID_EXCEEDS_TOTAL, SUPPLIER_REQUIRED_FOR_CREDIT, SERIAL_COUNT, SERIAL_DUPLICATE,
+        PAID_EXCEEDS_TOTAL, SUPPLIER_REQUIRED_FOR_CREDIT, SERIAL_COUNT, SERIAL_DUPLICATE, BRANCH_REQUIRED, SUPPLIER_NOT_FOUND,
     }
 }
 
@@ -61,7 +60,12 @@ class RecordPurchaseUseCase @Inject constructor(
         if (items.isEmpty()) throw PurchaseException(PurchaseException.Reason.NO_LINES)
 
         return db.withTransaction {
-            val branchId = db.branchDao().activeBranchId()
+            val branches = db.branchDao()
+            val branchId = branches.selectedId() ?: branches.firstId()
+                ?: throw PurchaseException(PurchaseException.Reason.BRANCH_REQUIRED)
+            if (supplierId != null && supplierDao.getById(supplierId) == null) {
+                throw PurchaseException(PurchaseException.Reason.SUPPLIER_NOT_FOUND)
+            }
             val purchaseId = java.util.UUID.randomUUID().toString()
             val lines = mutableListOf<PurchaseLineEntity>()
 

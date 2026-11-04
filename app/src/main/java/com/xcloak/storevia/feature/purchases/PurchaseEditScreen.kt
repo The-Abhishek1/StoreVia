@@ -39,6 +39,7 @@ fun PurchaseEditScreen(onBack: () -> Unit, onScan: () -> Unit, onSaved: (String)
     val results by vm.results.collectAsStateWithLifecycle()
     val suppliers by vm.suppliers.collectAsStateWithLifecycle()
     val features by vm.features.collectAsStateWithLifecycle()
+    val canManage by vm.canManage.collectAsStateWithLifecycle()
     var pickSupplier by remember { mutableStateOf(false) }
     var pickDate by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { vm.events.collect { if (it is PurchaseEvent.Saved) onSaved(it.purchaseId) } }
@@ -48,6 +49,10 @@ fun PurchaseEditScreen(onBack: () -> Unit, onScan: () -> Unit, onSaved: (String)
             title = { Text(stringResource(R.string.new_purchase)) },
             navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.back)) } },
         )
+        if (!canManage) {
+            Text(stringResource(R.string.err_permission_denied), Modifier.weight(1f).padding(24.dp))
+            return@Column
+        }
         Row(Modifier.padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             AssistChip(onClick = { pickSupplier = true }, label = { Text(ui.supplier?.name ?: stringResource(R.string.no_supplier)) })
             OutlinedTextField(ui.invoiceNo, vm::setInvoice, singleLine = true, label = { Text(stringResource(R.string.field_supplier_invoice)) }, modifier = Modifier.weight(1f))
@@ -144,7 +149,7 @@ fun PurchaseEditScreen(onBack: () -> Unit, onScan: () -> Unit, onSaved: (String)
             LineDialog(
                 line,
                 supportsBatchTracking = features.supportsBatchTracking,
-                supportsExpiryTracking = features.supportsExpiryTracking,
+                supportsExpiryTracking = features.supportsExpiryTracking || line.trackExpiry,
                 onSave = { q, c, b, e, usePack, serials -> vm.updateLine(id, q, c, b, e, usePack, serials) },
                 onDismiss = { vm.openLine(null) },
             )

@@ -158,7 +158,15 @@ class ImportExportViewModel @Inject constructor(
         _ui.update { it.copy(busy = true) }
         val document = SalesImportParser.parse(summaryCsv, linesCsv, salesPaymentsCsv)
         val validation = salesImporter.validate(document)
-        _ui.update { it.copy(busy = false, pendingSales = PendingSalesImport(document, validation)) }
+        _ui.update {
+            it.copy(
+                busy = false,
+                pendingSales = PendingSalesImport(document, validation),
+                salesSummarySelected = false,
+                salesLinesSelected = false,
+                salesPaymentsSelected = false,
+            )
+        }
         salesSummaryCsv = null
         salesLinesCsv = null
         salesPaymentsCsv = null

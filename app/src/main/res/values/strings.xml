@@ -84,6 +84,7 @@
     <string name="err_name_required">Enter a product name</string>
     <string name="err_required">This field is required</string>
     <string name="err_store_name_required">Enter a store name</string>
+    <string name="err_store_unavailable">The store is no longer available. Reopen settings and try again.</string>
     <string name="err_phone_invalid">Enter a valid mobile number with 10 to 15 digits</string>
     <string name="err_price_invalid">Enter a valid price</string>
     <string name="err_amount_invalid">Enter a valid amount</string>
@@ -211,6 +212,7 @@
     <string name="err_credit_limit">Credit limit of %1$s would be exceeded</string>
     <string name="err_exceeds_balance">Amount is more than the balance due</string>
     <string name="err_amount_positive">Enter an amount above zero</string>
+    <string name="customer_unavailable">This customer is no longer available.</string>
 
     <!-- Stock adjustments and activity -->
     <string name="adjust_stock">Adjust stock</string>
@@ -276,6 +278,9 @@
     <string name="allow_negative_hint">Useful if you bill before recording purchases. Stock can go below zero.</string>
     <string name="err_prefix_invalid">Use up to 8 letters or digits</string>
     <string name="err_next_invoice">Can’t be lower than the current number</string>
+    <string name="field_device_series">This device’s invoice code (optional)</string>
+    <string name="device_series_hint">Give each additional synced device a different 1–6 character code to avoid duplicate invoice numbers. The first device may leave this blank.</string>
+    <string name="err_device_series_invalid">Use up to 6 letters or digits.</string>
     <string name="err_gstin_format">GSTIN must be 15 characters in the standard format</string>
     <string name="err_gstin_state">GSTIN doesn’t start with the selected state’s code</string>
     <string name="err_gstin_checksum">Please re-check the GSTIN, the last character doesn’t match</string>
@@ -542,10 +547,13 @@
     <string name="categories_empty_hint">Add categories like Grocery, Dairy or Stationery to find products faster.</string>
     <string name="categories_search_hint">Search categories</string>
     <string name="categories_no_matches">No categories match your search.</string>
+    <string name="err_category_not_found">This category is no longer available.</string>
     <string name="category_products">%1$d products</string>
     <string name="delete_category_title">Delete this category?</string>
     <string name="delete_category_body">Products in it are kept and become uncategorised.</string>
     <string name="err_category_exists">A category with this name already exists</string>
+    <string name="err_supplier_not_found">The selected supplier is no longer available.</string>
+    <string name="err_branch_required">No active branch is available. Set up a branch before recording a purchase.</string>
 
     <!-- Onboarding -->
     <string name="onboarding_welcome">Welcome to Storevia</string>
@@ -589,6 +597,7 @@
     <string name="sledger_payment">Payment made</string>
     <string name="sledger_adjustment">Old balance added</string>
     <string name="err_exceeds_owed">That is more than you owe this supplier</string>
+    <string name="supplier_unavailable">This supplier is no longer available.</string>
     <string name="no_supplier">No supplier (paid at once)</string>
     <string name="choose_supplier">Choose supplier</string>
     <string name="field_supplier_invoice">Supplier invoice no.</string>

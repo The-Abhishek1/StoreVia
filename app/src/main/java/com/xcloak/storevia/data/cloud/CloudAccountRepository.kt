@@ -54,7 +54,12 @@ class CloudAccountRepository @Inject constructor(
             BuildConfig.SUPABASE_ANON_KEY.isNotBlank() &&
             !BuildConfig.SUPABASE_URL.contains("YOUR-PROJECT")
 
-    fun signedInEmail(): String? = client.auth.currentSessionOrNull()?.user?.email
+    fun signedInIdentifier(): String? {
+        val user = client.auth.currentSessionOrNull()?.user ?: return null
+        return cloudAccountIdentifier(user.email, user.phone)
+    }
+
+    fun hasSignedInSession(): Boolean = client.auth.currentSessionOrNull() != null
     val authSessionStatus get() = client.auth.sessionStatus
 
     suspend fun signUp(email: String, password: String) {
@@ -63,7 +68,7 @@ class CloudAccountRepository @Inject constructor(
             this.email = email.trim()
             this.password = password
         }
-        if (signedInEmail() != null) prefs.update { copy(localOnlyMode = false) }
+        if (hasSignedInSession()) prefs.update { copy(localOnlyMode = false) }
     }
 
     suspend fun resendSignupConfirmation(email: String) {
@@ -79,12 +84,13 @@ class CloudAccountRepository @Inject constructor(
                 connection.readTimeout = 15_000
                 connection.doOutput = true
                 connection.setRequestProperty("apikey", BuildConfig.SUPABASE_ANON_KEY)
-                connection.setRequestProperty("Authorization", "Bearer ${BuildConfig.SUPABASE_ANON_KEY}")
+                connection.setRequestProperty("Authorization", supabaseAuthorizationHeader(BuildConfig.SUPABASE_ANON_KEY))
                 connection.setRequestProperty("Content-Type", "application/json")
                 val body = buildJsonObject {
                     put("type", "signup")
                     put("email", email.trim())
                 }
+
                 connection.outputStream.use { it.write(body.toString().toByteArray(StandardCharsets.UTF_8)) }
                 val responseCode = connection.responseCode
                 if (responseCode !in 200..299) {
@@ -295,3 +301,8 @@ class CloudAccountRepository @Inject constructor(
         const val AUTH_CALLBACK_URL = "storevia://auth/callback"
     }
 }
+
+internal fun cloudAccountIdentifier(email: String?, phone: String?): String? =
+    email?.takeIf(String::isNotBlank) ?: phone?.takeIf(String::isNotBlank)
+
+internal fun supabaseAuthorizationHeader(anonKey: String): String = "Bearer $anonKey"

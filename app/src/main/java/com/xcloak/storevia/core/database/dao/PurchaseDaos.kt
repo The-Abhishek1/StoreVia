@@ -16,8 +16,8 @@ data class PurchaseListRow(
 
 @Dao
 interface SupplierDao {
-    @Query("SELECT * FROM suppliers WHERE id = :id") fun observeById(id: String): Flow<SupplierEntity?>
-    @Query("SELECT * FROM suppliers WHERE id = :id") suspend fun getById(id: String): SupplierEntity?
+    @Query("SELECT * FROM suppliers WHERE id = :id AND deletedAt IS NULL") fun observeById(id: String): Flow<SupplierEntity?>
+    @Query("SELECT * FROM suppliers WHERE id = :id AND deletedAt IS NULL") suspend fun getById(id: String): SupplierEntity?
     @Insert suspend fun insert(s: SupplierEntity)
     @Update suspend fun update(s: SupplierEntity)
 
@@ -36,7 +36,9 @@ interface SupplierDao {
 
     /** What you owe all suppliers together (suppliers you are in credit with are not netted off). */
     @Query("""SELECT COALESCE(SUM(b), 0) FROM
-              (SELECT SUM(amountPaise) AS b FROM supplier_ledger GROUP BY supplierId HAVING SUM(amountPaise) > 0)""")
+              (SELECT SUM(l.amountPaise) AS b FROM supplier_ledger l
+               INNER JOIN suppliers s ON s.id = l.supplierId AND s.deletedAt IS NULL
+               GROUP BY l.supplierId HAVING SUM(l.amountPaise) > 0)""")
     fun observeTotalPayable(): Flow<Long>
 }
 
@@ -60,8 +62,12 @@ interface PurchaseDao {
         unpaidOnly: Boolean = false,
     ): Flow<List<PurchaseListRow>>
 
-    @Query("SELECT * FROM purchases WHERE id = :id") fun observeById(id: String): Flow<PurchaseEntity?>
-    @Query("SELECT * FROM purchase_lines WHERE purchaseId = :purchaseId ORDER BY rowid") fun observeLines(purchaseId: String): Flow<List<PurchaseLineEntity>>
+    @Query("SELECT * FROM purchases WHERE id = :id AND :branchId IS NOT NULL AND branchId = :branchId")
+    fun observeById(id: String, branchId: String?): Flow<PurchaseEntity?>
+    @Query("""SELECT * FROM purchase_lines WHERE purchaseId = :purchaseId
+              AND EXISTS (SELECT 1 FROM purchases p WHERE p.id = :purchaseId AND :branchId IS NOT NULL AND p.branchId = :branchId)
+              ORDER BY rowid""")
+    fun observeLines(purchaseId: String, branchId: String?): Flow<List<PurchaseLineEntity>>
     @Query("SELECT * FROM purchase_lines WHERE purchaseId = :purchaseId ORDER BY rowid") suspend fun getLines(purchaseId: String): List<PurchaseLineEntity>
     @Query("SELECT * FROM purchases WHERE id = :id") suspend fun getById(id: String): PurchaseEntity?
 }

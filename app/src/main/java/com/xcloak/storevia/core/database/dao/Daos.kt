@@ -16,6 +16,27 @@ interface StoreDao {
     @Query("SELECT * FROM store LIMIT 1") suspend fun get(): StoreEntity?
     @Query("SELECT * FROM store LIMIT 1") fun observe(): Flow<StoreEntity?>
     @Insert(onConflict = OnConflictStrategy.REPLACE) suspend fun upsert(store: StoreEntity)
+    @Query(
+        """UPDATE store SET name = :name, ownerName = :ownerName, address = :address, city = :city,
+            phone = :phone, gstin = :gstin, stateCode = :stateCode, invoicePrefix = :invoicePrefix,
+            nextInvoiceNo = MAX(nextInvoiceNo, :nextInvoiceNo), allowNegativeStock = :allowNegativeStock,
+            updatedAt = :updatedAt, dirty = 1
+            WHERE id = :id"""
+    )
+    suspend fun updateSettings(
+        id: String,
+        name: String,
+        ownerName: String,
+        address: String,
+        city: String,
+        phone: String,
+        gstin: String?,
+        stateCode: String,
+        invoicePrefix: String,
+        nextInvoiceNo: Long,
+        allowNegativeStock: Boolean,
+        updatedAt: Long,
+    ): Int
     @Query("UPDATE store SET nextInvoiceNo = nextInvoiceNo + 1, dirty = 1 WHERE id = :id")
     suspend fun incrementInvoiceNo(id: String)
 }
@@ -319,7 +340,7 @@ data class CustomerBalanceRow(val id: String, val name: String, val phone: Strin
 
 @Dao
 interface CustomerDao {
-    @Query("SELECT * FROM customers WHERE id = :id") fun observeById(id: String): Flow<CustomerEntity?>
+    @Query("SELECT * FROM customers WHERE id = :id AND deletedAt IS NULL") fun observeById(id: String): Flow<CustomerEntity?>
 
     @Query("""SELECT c.id AS id, c.name AS name, c.phone AS phone,
                      COALESCE((SELECT SUM(l.amountPaise) FROM customer_ledger l WHERE l.customerId = c.id), 0) AS balancePaise
@@ -337,10 +358,12 @@ interface CustomerDao {
 
     /** Sum of what customers owe (customers with a positive balance only). */
     @Query("""SELECT COALESCE(SUM(b), 0) FROM
-              (SELECT SUM(amountPaise) AS b FROM customer_ledger GROUP BY customerId HAVING SUM(amountPaise) > 0)""")
+              (SELECT SUM(l.amountPaise) AS b FROM customer_ledger l
+               INNER JOIN customers c ON c.id = l.customerId AND c.deletedAt IS NULL
+               GROUP BY l.customerId HAVING SUM(l.amountPaise) > 0)""")
     fun observeTotalDue(): Flow<Long>
 
-    @Query("SELECT * FROM customers WHERE id = :id") suspend fun getById(id: String): CustomerEntity?
+    @Query("SELECT * FROM customers WHERE id = :id AND deletedAt IS NULL") suspend fun getById(id: String): CustomerEntity?
     @Query("SELECT * FROM customers WHERE deletedAt IS NULL AND name = :name COLLATE NOCASE LIMIT 1")
     suspend fun findByName(name: String): CustomerEntity?
     @Insert suspend fun insert(c: CustomerEntity)
@@ -402,7 +425,7 @@ interface SaleDao {
 @Dao
 interface CategoryDao {
     @Query("SELECT * FROM categories WHERE deletedAt IS NULL ORDER BY name COLLATE NOCASE") fun observeAll(): Flow<List<CategoryEntity>>
-    @Query("SELECT * FROM categories WHERE id = :id") suspend fun getById(id: String): CategoryEntity?
+    @Query("SELECT * FROM categories WHERE id = :id AND deletedAt IS NULL") suspend fun getById(id: String): CategoryEntity?
     @Query("SELECT * FROM categories WHERE deletedAt IS NULL AND name = :name COLLATE NOCASE LIMIT 1") suspend fun findByName(name: String): CategoryEntity?
     @Insert suspend fun insert(c: CategoryEntity)
     @Update suspend fun update(c: CategoryEntity)

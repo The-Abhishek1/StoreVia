@@ -28,6 +28,8 @@ class CsvTest {
     @Test fun formulaCellsAreNeutralised() {
         assertEquals("'=SUM(A1)", Csv.safe("=SUM(A1)"))
         assertEquals("'@cmd", Csv.safe("@cmd"))
+        assertEquals("'  +1+1", Csv.safe("  +1+1"))
+        assertEquals("' -1", Csv.safe(" -1"))
         assertEquals("Tea", Csv.safe("Tea"))
     }
 }

@@ -10,7 +10,7 @@ import com.xcloak.storevia.core.database.entity.*
 import javax.inject.Inject
 
 class KhataException(val reason: Reason) : Exception(reason.name) {
-    enum class Reason { INVALID_AMOUNT, EXCEEDS_BALANCE }
+    enum class Reason { INVALID_AMOUNT, EXCEEDS_BALANCE, CUSTOMER_NOT_FOUND }
 }
 
 /**
@@ -34,6 +34,9 @@ class ReceivePaymentUseCase @Inject constructor(
         access.require(Permission.RECEIVE_KHATA_PAYMENT)
         if (amountPaise <= 0) throw KhataException(KhataException.Reason.INVALID_AMOUNT)
         db.withTransaction {
+            if (customerDao.getById(customerId) == null) {
+                throw KhataException(KhataException.Reason.CUSTOMER_NOT_FOUND)
+            }
             if (amountPaise > customerDao.balance(customerId)) throw KhataException(KhataException.Reason.EXCEEDS_BALANCE)
 
             var left = amountPaise

@@ -35,6 +35,16 @@ class AccessTest {
         assertFalse(Permission.VIEW_COST in c); assertFalse(Permission.VIEW_REPORTS in c); assertFalse(Permission.PROCESS_RETURN in c)
     }
 
+    @Test fun purchaseAndCategoryManagementAreUnavailableToCashiers() {
+        val manager = RolePermissions.of(Role.MANAGER)
+        assertTrue(Permission.MANAGE_PURCHASES in manager)
+        assertTrue(Permission.MANAGE_PRODUCTS in manager)
+
+        val cashier = RolePermissions.of(Role.CASHIER)
+        assertFalse(Permission.MANAGE_PURCHASES in cashier)
+        assertFalse(Permission.MANAGE_PRODUCTS in cashier)
+    }
+
     @Test fun ownerCanLoosenTwoThingsForCashiers() {
         val c = RolePermissions.of(Role.CASHIER, CashierOptions(canDiscount = true, canSellOnCredit = true))
         assertTrue(Permission.APPLY_DISCOUNT in c); assertTrue(Permission.SELL_ON_CREDIT in c)

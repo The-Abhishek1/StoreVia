@@ -12,6 +12,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
@@ -24,14 +25,18 @@ import com.xcloak.storevia.core.ui.LoadingState
 @Composable
 fun CategoriesScreen(onBack: () -> Unit, vm: CategoriesViewModel = hiltViewModel()) {
     val rows by vm.rows.collectAsStateWithLifecycle()
+    val canManage by vm.canManage.collectAsStateWithLifecycle()
     var query by remember { mutableStateOf("") }
     var editing by remember { mutableStateOf<CategoryRow?>(null) }
     var adding by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf<CategoryRow?>(null) }
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val snackbarHostState = remember { SnackbarHostState() }
 
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text(stringResource(R.string.categories_title)) },
@@ -39,12 +44,13 @@ fun CategoriesScreen(onBack: () -> Unit, vm: CategoriesViewModel = hiltViewModel
             )
         },
         floatingActionButton = {
-            ExtendedFloatingActionButton(onClick = { adding = true }, icon = { Icon(Icons.Filled.Add, null) }, text = { Text(stringResource(R.string.add_category)) })
+            if (canManage) ExtendedFloatingActionButton(onClick = { adding = true }, icon = { Icon(Icons.Filled.Add, null) }, text = { Text(stringResource(R.string.add_category)) })
         },
     ) { padding ->
         val list = rows
         val filtered = list?.filter { it.category.name.contains(query.trim(), ignoreCase = true) }
         when {
+            !canManage -> Text(stringResource(R.string.err_permission_denied), Modifier.padding(padding).padding(24.dp))
             list == null -> LoadingState(Modifier.padding(padding))
             else -> Column(Modifier.padding(padding).fillMaxSize()) {
                 OutlinedTextField(
@@ -94,7 +100,14 @@ fun CategoriesScreen(onBack: () -> Unit, vm: CategoriesViewModel = hiltViewModel
             onDismissRequest = { deleting = null },
             title = { Text(stringResource(R.string.delete_category_title)) },
             text = { Text(stringResource(R.string.delete_category_body)) },
-            confirmButton = { TextButton(onClick = { scope.launch { vm.delete(r.category.id) }; deleting = null }) { Text(stringResource(R.string.delete), color = MaterialTheme.colorScheme.error) } },
+            confirmButton = {
+                TextButton(onClick = {
+                    scope.launch {
+                        vm.delete(r.category.id)?.let { snackbarHostState.showSnackbar(context.getString(it)) }
+                    }
+                    deleting = null
+                }) { Text(stringResource(R.string.delete), color = MaterialTheme.colorScheme.error) }
+            },
             dismissButton = { TextButton(onClick = { deleting = null }) { Text(stringResource(R.string.cancel)) } },
         )
     }

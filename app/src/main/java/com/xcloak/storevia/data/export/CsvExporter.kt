@@ -59,7 +59,7 @@ class CsvExporter @Inject constructor(
     private suspend fun products(): String = Csv.write(
         listOf(PRODUCT_HEADER) + exportDao.products().map {
             listOf(
-                Csv.safe(it.name), Csv.safe(it.sku.orEmpty()), Csv.safe(it.barcode.orEmpty()), it.unitSymbol, it.hsnCode.orEmpty(),
+                Csv.safe(it.name), Csv.safe(it.sku.orEmpty()), Csv.safe(it.barcode.orEmpty()), Csv.safe(it.unitSymbol), Csv.safe(it.hsnCode.orEmpty()),
                 (it.gstRateBp / 100.0).toString().removeSuffix(".0"), if (it.taxInclusive) "yes" else "no",
                 Parsing.paiseToPlain(it.costPaise), Parsing.paiseToPlain(it.sellPricePaise), it.mrpPaise?.let(Parsing::paiseToPlain).orEmpty(),
                 Parsing.milliToInput(it.minStockMilli), Parsing.milliToInput(it.onHandMilli), Csv.safe(it.attributesJson),
@@ -71,7 +71,7 @@ class CsvExporter @Inject constructor(
         listOf(listOf("bill_id", "sku", "product_name", "qty", "unit_price")) +
         exportDao.saleLines().map {
             listOf(
-                it.invoiceNo, Csv.safe(it.sku.orEmpty()), Csv.safe(it.productName),
+                Csv.safe(it.invoiceNo), Csv.safe(it.sku.orEmpty()), Csv.safe(it.productName),
                 Parsing.milliToInput(it.qtyMilli), Parsing.paiseToPlain(it.unitPricePaise),
             )
         }
@@ -80,13 +80,13 @@ class CsvExporter @Inject constructor(
     private suspend fun salesPayments(): String = Csv.write(
         listOf(listOf("bill_id", "payment_mode", "amount", "reference")) +
             exportDao.salePayments().map {
-                listOf(it.invoiceNo, it.method, Parsing.paiseToPlain(it.amountPaise), Csv.safe(it.reference.orEmpty()))
+                listOf(                Csv.safe(it.invoiceNo), Csv.safe(it.method), Parsing.paiseToPlain(it.amountPaise), Csv.safe(it.reference.orEmpty()))
             },
     )
 
     private suspend fun stock(): String = Csv.write(
         listOf(listOf("branch", "product", "unit", "batch_no", "expiry", "quantity", "cost")) + exportDao.batches().map {
-            listOf(Csv.safe(it.branchName), Csv.safe(it.productName), it.unitSymbol, Csv.safe(it.batchNo.orEmpty()), it.expiryDate?.toString().orEmpty(),
+            listOf(Csv.safe(it.branchName), Csv.safe(it.productName), Csv.safe(it.unitSymbol), Csv.safe(it.batchNo.orEmpty()), it.expiryDate?.toString().orEmpty(),
                 Parsing.milliToInput(it.qtyOnHandMilli), Parsing.paiseToPlain(it.costPaise))
         }
     )
@@ -95,8 +95,8 @@ class CsvExporter @Inject constructor(
         listOf(listOf("bill_id", "branch", "date", "customer", "payment_mode", "status", "taxable_value", "tax", "discount", "round_off", "total", "returned", "paid", "due")) +
             exportDao.sales().map {
                 listOf(
-                    it.invoiceNo, Csv.safe(it.branchName), Instant.ofEpochMilli(it.createdAt).atZone(ZoneId.systemDefault()).toLocalDate().toString(),
-                    Csv.safe(it.customerName.orEmpty()), it.paymentMode, it.status,
+                    Csv.safe(it.invoiceNo), Csv.safe(it.branchName), Instant.ofEpochMilli(it.createdAt).atZone(ZoneId.systemDefault()).toLocalDate().toString(),
+                    Csv.safe(it.customerName.orEmpty()), Csv.safe(it.paymentMode), Csv.safe(it.status),
                     Parsing.paiseToPlain(it.subtotalPaise), Parsing.paiseToPlain(it.taxPaise), Parsing.paiseToPlain(it.discountPaise),
                     Parsing.paiseToPlain(it.roundOffPaise), Parsing.paiseToPlain(it.totalPaise), Parsing.paiseToPlain(it.returnedPaise),
                     Parsing.paiseToPlain(it.paidPaise), Parsing.paiseToPlain(it.totalPaise - it.returnedPaise - it.paidPaise),

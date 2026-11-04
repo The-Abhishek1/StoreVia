@@ -10,7 +10,6 @@ import com.xcloak.storevia.core.util.Parsing
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.*
-import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -21,8 +20,11 @@ class CustomersViewModel @Inject constructor(private val customerDao: CustomerDa
     val query: StateFlow<String> = _query.asStateFlow()
 
     val rows: StateFlow<List<CustomerBalanceRow>?> = _query
-        .flatMapLatest { customerDao.observeWithBalance(it.trim()) }
-        .map<List<CustomerBalanceRow>, List<CustomerBalanceRow>?> { it }
+        .flatMapLatest { query ->
+            customerDao.observeWithBalance(query.trim())
+                .map<List<CustomerBalanceRow>, List<CustomerBalanceRow>?> { it }
+                .onStart { emit(null) }
+        }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     val totalDue: StateFlow<Long> = customerDao.observeTotalDue()
@@ -31,13 +33,14 @@ class CustomersViewModel @Inject constructor(private val customerDao: CustomerDa
     fun setQuery(q: String) { _query.value = q }
 
     /** @return false if the credit limit text is invalid. */
-    fun add(name: String, phone: String, limitText: String): Boolean {
-        if (name.isBlank()) return false
+    suspend fun add(name: String, phone: String, limitText: String): Boolean {
+        if (name.isBlank() || !access.actor().can(Permission.MANAGE_CUSTOMERS)) return false
         val limit = if (limitText.isBlank()) null else (Parsing.moneyToPaise(limitText) ?: return false)
         if (limit != null && !access.actor().can(Permission.EDIT_CREDIT_LIMIT)) return false
-        viewModelScope.launch {
-            customerDao.insert(CustomerEntity(name = name.trim(), phone = phone.trim().ifEmpty { null }, creditLimitPaise = limit))
-        }
+        if (!access.actor().can(Permission.MANAGE_CUSTOMERS) ||
+            (limit != null && !access.actor().can(Permission.EDIT_CREDIT_LIMIT))
+        ) return false
+        customerDao.insert(CustomerEntity(name = name.trim(), phone = phone.trim().ifEmpty { null }, creditLimitPaise = limit))
         return true
     }
 }

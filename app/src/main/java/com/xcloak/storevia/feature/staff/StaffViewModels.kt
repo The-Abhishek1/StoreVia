@@ -95,8 +95,14 @@ class StaffLoginViewModel @Inject constructor(private val repo: StaffRepository,
 }
 
 @HiltViewModel
-class AuditViewModel @Inject constructor(dao: AuditDao) : ViewModel() {
-    val rows: StateFlow<List<AuditEntity>?> = dao.observeRecent().map<List<AuditEntity>, List<AuditEntity>?> { it }
+class AuditViewModel @Inject constructor(dao: AuditDao, session: StaffSession) : ViewModel() {
+    val canView: StateFlow<Boolean> = session.actorState
+        .map { it.can(Permission.VIEW_AUDIT) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, session.actor().can(Permission.VIEW_AUDIT))
+
+    val rows: StateFlow<List<AuditEntity>?> = combine(dao.observeRecent(), canView) { rows, allowed ->
+        if (allowed) rows else emptyList()
+    }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 }
 

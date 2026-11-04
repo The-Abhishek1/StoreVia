@@ -9,10 +9,17 @@ object ReorderPlanner {
      * Rounded up to whole units (or half units for kg/litre). Always an editable suggestion, never an order.
      */
     fun suggestMilli(onHandMilli: Long, minStockMilli: Long, allowDecimal: Boolean): Long {
-        val need = 2 * minStockMilli - onHandMilli
-        if (need <= 0) return 0
+        if (minStockMilli <= 0) return 0
+        val target = if (minStockMilli > Long.MAX_VALUE / 2) Long.MAX_VALUE else minStockMilli * 2
+        if (onHandMilli >= target) return 0
+        val need = if (onHandMilli < 0 && target > Long.MAX_VALUE + onHandMilli) {
+            Long.MAX_VALUE
+        } else {
+            target - onHandMilli
+        }
         val step = if (allowDecimal) 500L else 1000L
-        return (need + step - 1) / step * step
+        val units = need / step + if (need % step == 0L) 0 else 1
+        return if (units > Long.MAX_VALUE / step) Long.MAX_VALUE / step * step else units * step
     }
 
     /** A plain-text list to send to a supplier over WhatsApp or SMS. */

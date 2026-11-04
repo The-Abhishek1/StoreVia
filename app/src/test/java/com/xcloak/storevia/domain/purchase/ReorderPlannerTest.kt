@@ -22,6 +22,12 @@ class ReorderPlannerTest {
         assertEquals(2_000L, ReorderPlanner.suggestMilli(0, 600, false))           // need 1200 -> 2 whole units
     }
 
+    @Test fun largeReorderThresholdsDoNotOverflow() {
+        assertEquals(Long.MAX_VALUE / 1_000 * 1_000, ReorderPlanner.suggestMilli(0, Long.MAX_VALUE, false))
+        assertEquals(Long.MAX_VALUE / 500 * 500, ReorderPlanner.suggestMilli(Long.MIN_VALUE, Long.MAX_VALUE / 2, true))
+        assertEquals(0L, ReorderPlanner.suggestMilli(0, 0, false))
+    }
+
     @Test fun shareTextListsItemsWithSuggestedQuantities() {
         val rows = listOf(
             ReorderRow("1", "Tea", "kg", true, 500, 2_000, 0),

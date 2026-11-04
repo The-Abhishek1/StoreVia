@@ -113,12 +113,12 @@ fun CloudAccountScreen(
                 )
                 LinearProgressIndicator(progress = { stage / 4f }, modifier = Modifier.fillMaxWidth())
             }
-            if (ui.email != null) {
+            if (ui.accountIdentifier != null) {
                 Text(stringResource(R.string.cloud_description), style = MaterialTheme.typography.bodyLarge)
             }
             if (!vm.isConfigured) {
                 Text(stringResource(R.string.cloud_not_configured), color = MaterialTheme.colorScheme.error)
-            } else if (ui.email == null) {
+            } else if (ui.accountIdentifier == null) {
                 Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(
@@ -322,7 +322,7 @@ fun CloudAccountScreen(
                                         style = MaterialTheme.typography.titleMedium,
                                     )
                                     Text(
-                                        stringResource(R.string.cloud_connected_as, ui.email.orEmpty()),
+                                        stringResource(R.string.cloud_connected_as, ui.accountIdentifier.orEmpty()),
                                         style = MaterialTheme.typography.bodyMedium,
                                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
@@ -359,7 +359,7 @@ fun CloudAccountScreen(
                         }
                     }
                 } else {
-                    Text(stringResource(R.string.cloud_connected_as, ui.email.orEmpty()), style = MaterialTheme.typography.titleMedium)
+                    Text(stringResource(R.string.cloud_connected_as, ui.accountIdentifier.orEmpty()), style = MaterialTheme.typography.titleMedium)
                 }
                 if (adminOnly) {
                     if (!ui.platformAdmin) {

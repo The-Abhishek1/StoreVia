@@ -17,7 +17,9 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xcloak.storevia.core.ui.LoadingState
 import com.xcloak.storevia.R
+import com.xcloak.storevia.core.access.Permission
 import com.xcloak.storevia.core.money.Money
+import com.xcloak.storevia.core.ui.can
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -37,7 +39,9 @@ fun SuppliersScreen(onBack: () -> Unit, onOpen: (String) -> Unit, vm: SuppliersV
             )
         },
         floatingActionButton = {
-            ExtendedFloatingActionButton(onClick = { adding = true }, icon = { Icon(Icons.Filled.Add, null) }, text = { Text(stringResource(R.string.add_supplier)) })
+            if (can(Permission.MANAGE_PURCHASES)) {
+                ExtendedFloatingActionButton(onClick = { adding = true }, icon = { Icon(Icons.Filled.Add, null) }, text = { Text(stringResource(R.string.add_supplier)) })
+            }
         },
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
@@ -85,7 +89,9 @@ fun SuppliersScreen(onBack: () -> Unit, onOpen: (String) -> Unit, vm: SuppliersV
             }
         }
     }
-    if (adding) SupplierFormDialog(null, onSave = { n, p, g -> vm.add(n, p, g) }, onDismiss = { adding = false })
+    if (adding && can(Permission.MANAGE_PURCHASES)) {
+        SupplierFormDialog(null, onSave = { n, p, g -> vm.add(n, p, g) }, onDismiss = { adding = false })
+    }
 }
 
 /** "You owe ₹x" in red, "Settled", or "In credit ₹x" when you've overpaid. */

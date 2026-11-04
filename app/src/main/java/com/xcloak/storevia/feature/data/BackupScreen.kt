@@ -29,15 +29,13 @@ import java.util.Locale
 @Composable
 fun BackupScreen(onBack: () -> Unit, vm: BackupViewModel = hiltViewModel()) {
     val ui by vm.ui.collectAsStateWithLifecycle()
-    var passphraseForBackup by remember { mutableStateOf<String?>(null) }
     var askBackupPassphrase by remember { mutableStateOf(false) }
     var backupToCloud by remember { mutableStateOf(false) }
     var restoreFromAuto by remember { mutableStateOf<AutoBackup?>(null) }
     val canRestore = can(Permission.RESTORE)
 
     val createLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
-        if (uri != null) vm.backup(uri, passphraseForBackup)
-        passphraseForBackup = null
+        if (uri != null) vm.backup(uri) else vm.cancelBackup()
     }
     val openLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) vm.startRestore(uri) }
     val fileName = "storevia-backup-" + SimpleDateFormat("yyyyMMdd", Locale.US).format(Date()) + ".svbackup"
@@ -66,7 +64,7 @@ fun BackupScreen(onBack: () -> Unit, vm: BackupViewModel = hiltViewModel()) {
                 )
             }
             item {
-                Button(onClick = { askBackupPassphrase = true }, enabled = !ui.busy, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+                Button(onClick = { backupToCloud = false; askBackupPassphrase = true }, enabled = !ui.busy, modifier = Modifier.fillMaxWidth().height(52.dp)) {
                     Text(stringResource(R.string.backup_now))
                 }
                 Text(stringResource(R.string.backup_now_hint), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
@@ -106,14 +104,14 @@ fun BackupScreen(onBack: () -> Unit, vm: BackupViewModel = hiltViewModel()) {
 
     if (askBackupPassphrase) {
         PassphraseSetDialog(
-            onDismiss = { askBackupPassphrase = false },
+            onDismiss = { askBackupPassphrase = false; backupToCloud = false },
             onConfirm = { pass ->
                 askBackupPassphrase = false
                 if (backupToCloud) {
                     backupToCloud = false
                     vm.backupToCloud(pass)
                 } else {
-                    passphraseForBackup = pass
+                    vm.prepareBackup(pass)
                     createLauncher.launch(fileName)
                 }
             },

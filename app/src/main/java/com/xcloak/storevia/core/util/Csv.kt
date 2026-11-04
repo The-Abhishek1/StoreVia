@@ -45,10 +45,9 @@ object Csv {
     private fun quote(v: String): String =
         if (v.any { it == ',' || it == '"' || it == '\n' || it == '\r' }) "\"" + v.replace("\"", "\"\"") + "\"" else v
 
-    /**
-     * Spreadsheet formula injection guard for TEXT cells (names, notes): a cell starting with = + - @
-     * can run as a formula when the file is opened in Excel/Sheets. Don't use for numbers.
-     */
-    fun safe(text: String): String =
-        if (text.isNotEmpty() && text[0] in "=+-@\t\r") "'$text" else text
+    /** Spreadsheet formula injection guard for TEXT cells (names, notes). Don't use for numbers. */
+    fun safe(text: String): String {
+        val firstNonWhitespace = text.firstOrNull { !it.isWhitespace() }
+        return if (firstNonWhitespace != null && firstNonWhitespace in "=+-@") "'$text" else text
+    }
 }
