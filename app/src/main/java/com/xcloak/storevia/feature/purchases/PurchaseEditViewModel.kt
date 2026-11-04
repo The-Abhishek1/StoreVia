@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.xcloak.storevia.R
 import com.xcloak.storevia.core.database.dao.ProductDao
 import com.xcloak.storevia.core.database.dao.ProductListRow
+import com.xcloak.storevia.core.database.dao.BranchDao
 import com.xcloak.storevia.core.database.dao.SupplierDao
 import com.xcloak.storevia.core.database.dao.UnitDao
 import com.xcloak.storevia.core.database.entity.PaymentMethod
@@ -90,6 +91,7 @@ class PurchaseEditViewModel @Inject constructor(
     private val productDao: ProductDao,
     private val unitDao: UnitDao,
     private val supplierDao: SupplierDao,
+    branchDao: BranchDao,
     private val recordPurchase: RecordPurchaseUseCase,
     prefs: AppPrefs,
 ) : ViewModel() {
@@ -106,8 +108,13 @@ class PurchaseEditViewModel @Inject constructor(
     val suppliers: StateFlow<List<SupplierEntity>> =
         supplierDao.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    val results: StateFlow<List<ProductListRow>> = _ui.map { it.query.trim() }.distinctUntilChanged()
-        .flatMapLatest { q -> if (q.isEmpty()) flowOf(emptyList<ProductListRow>()) else productDao.listWithStock(q).map { it.take(8) } }
+    private val activeBranchId = branchDao.observeSelectedId().map { it ?: "default" }.distinctUntilChanged()
+
+    val results: StateFlow<List<ProductListRow>> = combine(_ui.map { it.query.trim() }.distinctUntilChanged(), activeBranchId) { q, branchId ->
+        q to branchId
+    }.flatMapLatest { (q, branchId) ->
+        if (q.isEmpty()) flowOf(emptyList()) else productDao.listWithStock(q, branchId).map { it.take(8) }
+    }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     init {

@@ -54,7 +54,7 @@ def sql_type(t):
 OWNER, MANAGER, CASHIER = "array['OWNER']", "array['OWNER','MANAGER']", "array['OWNER','MANAGER','CASHIER']"
 WRITE_ROLES = {}
 for t in ["store", "staff"]: WRITE_ROLES[t] = OWNER
-for t in ["units", "categories", "products", "product_barcodes", "batches", "suppliers", "purchases", "purchase_lines",
+for t in ["branches", "units", "categories", "products", "product_barcodes", "batches", "suppliers", "purchases", "purchase_lines",
           "supplier_ledger", "sale_returns", "sale_return_lines", "recipe_components", "serial_numbers"]: WRITE_ROLES[t] = MANAGER
 for t in ["customers", "sales", "sale_lines", "payments", "stock_movements", "customer_ledger", "audit_log"]: WRITE_ROLES[t] = CASHIER
 
@@ -395,6 +395,12 @@ for name, kind, local in tables:
         w('alter table public."products" add column if not exists "attributes_json" text not null default \'{}\';')
         w('alter table public."products" add column if not exists "parent_product_id" text;')
         w('alter table public."products" add column if not exists "variant_label" text;')
+    if name in {"batches", "stock_movements", "sales", "purchases"}:
+        w(f'alter table public."{name}" add column if not exists "branch_id" text not null default \'default\';')
+        w(f'update public."{name}" set "branch_id" = store_id where "branch_id" = \'default\';')
+        w(f'create index if not exists "{name}_branch_idx" on public."{name}" (store_id, "branch_id");')
+    if name == "branches":
+        w('create unique index if not exists "branches_store_name_unique" on public."branches" (store_id, "name");')
     if name == "serial_numbers":
         w('create unique index if not exists "serial_numbers_store_serial_unique" on public."serial_numbers" (store_id, "serial_number");')
     w(f'create index if not exists "{name}_sync_idx" on public."{name}" (store_id, server_updated_at, "id");')
@@ -410,6 +416,13 @@ for name, kind, local in tables:
         w(f'drop policy if exists "writers update" on public."{name}";')
         w(f'create policy "writers update" on public."{name}" for update using (public.can_write(store_id, {roles})) with check (public.can_write(store_id, {roles}));')
     w("")
+
+w("""-- Existing single-store data becomes that store's first branch.
+insert into public."branches" ("id", "name", "address", "city", "phone", "is_active", "created_at", "updated_at", "deleted_at", store_id)
+select s."id", s."name", s."address", s."city", s."phone", 1, s."created_at", s."updated_at", null, s."id"
+from public."store" s
+on conflict ("id") do nothing;
+""")
 
 w("notify pgrst, 'reload schema';")
 

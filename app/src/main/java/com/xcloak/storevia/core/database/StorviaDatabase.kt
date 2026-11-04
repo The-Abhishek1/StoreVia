@@ -92,10 +92,11 @@ abstract class StorviaDatabase : RoomDatabase() {
                 db.execSQL("CREATE INDEX IF NOT EXISTS `index_serial_numbers_batchId_status` ON `serial_numbers` (`batchId`, `status`)")
                 db.execSQL("CREATE INDEX IF NOT EXISTS `index_serial_numbers_saleLineId_status` ON `serial_numbers` (`saleLineId`, `status`)")
             }
-            val MIGRATION_7_8 = object : Migration(7, 8) {
-                override fun migrate(db: SupportSQLiteDatabase) {
-                    db.execSQL(
-                        """CREATE TABLE IF NOT EXISTS `branches` (
+        }
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """CREATE TABLE IF NOT EXISTS `branches` (
                             `id` TEXT NOT NULL,
                             `name` TEXT NOT NULL,
                             `address` TEXT NOT NULL,
@@ -108,19 +109,22 @@ abstract class StorviaDatabase : RoomDatabase() {
                             `deletedAt` INTEGER,
                             `dirty` INTEGER NOT NULL,
                             PRIMARY KEY(`id`)
-                        )""".trimIndent(),
-                    )
-                    db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_branches_name` ON `branches` (`name`)")
-                    db.execSQL("INSERT INTO `branches` (`id`, `name`, `address`, `city`, `phone`, `isActive`, `selectedOnDevice`, `createdAt`, `updatedAt`, `deletedAt`, `dirty`) SELECT 'default', COALESCE((SELECT `name` FROM `store` LIMIT 1), 'My Store'), '', '', '', 1, 1, 0, 0, NULL, 1")
-                    db.execSQL("ALTER TABLE `batches` ADD COLUMN `branchId` TEXT NOT NULL DEFAULT 'default'")
-                    db.execSQL("ALTER TABLE `stock_movements` ADD COLUMN `branchId` TEXT NOT NULL DEFAULT 'default'")
-                    db.execSQL("ALTER TABLE `sales` ADD COLUMN `branchId` TEXT NOT NULL DEFAULT 'default'")
-                    db.execSQL("ALTER TABLE `purchases` ADD COLUMN `branchId` TEXT NOT NULL DEFAULT 'default'")
-                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_batches_branchId_productId_expiryDate` ON `batches` (`branchId`, `productId`, `expiryDate`)")
-                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_stock_movements_branchId_productId_createdAt` ON `stock_movements` (`branchId`, `productId`, `createdAt`)")
-                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_sales_branchId_createdAt` ON `sales` (`branchId`, `createdAt`)")
-                    db.execSQL("CREATE INDEX IF NOT EXISTS `index_purchases_branchId_supplierId` ON `purchases` (`branchId`, `supplierId`)")
-                }
+                    )""".trimIndent(),
+                )
+                db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS `index_branches_name` ON `branches` (`name`)")
+                db.execSQL("INSERT INTO `branches` (`id`, `name`, `address`, `city`, `phone`, `isActive`, `selectedOnDevice`, `createdAt`, `updatedAt`, `deletedAt`, `dirty`) VALUES (COALESCE((SELECT `id` FROM `store` LIMIT 1), 'default'), COALESCE((SELECT `name` FROM `store` LIMIT 1), 'My Store'), '', '', '', 1, 1, 0, 0, NULL, 1)")
+                db.execSQL("ALTER TABLE `batches` ADD COLUMN `branchId` TEXT NOT NULL DEFAULT 'default'")
+                db.execSQL("ALTER TABLE `stock_movements` ADD COLUMN `branchId` TEXT NOT NULL DEFAULT 'default'")
+                db.execSQL("ALTER TABLE `sales` ADD COLUMN `branchId` TEXT NOT NULL DEFAULT 'default'")
+                db.execSQL("ALTER TABLE `purchases` ADD COLUMN `branchId` TEXT NOT NULL DEFAULT 'default'")
+                db.execSQL("UPDATE `batches` SET `branchId` = COALESCE((SELECT `id` FROM `store` LIMIT 1), 'default')")
+                db.execSQL("UPDATE `stock_movements` SET `branchId` = COALESCE((SELECT `id` FROM `store` LIMIT 1), 'default')")
+                db.execSQL("UPDATE `sales` SET `branchId` = COALESCE((SELECT `id` FROM `store` LIMIT 1), 'default')")
+                db.execSQL("UPDATE `purchases` SET `branchId` = COALESCE((SELECT `id` FROM `store` LIMIT 1), 'default')")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_batches_branchId_productId_expiryDate` ON `batches` (`branchId`, `productId`, `expiryDate`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_stock_movements_branchId_productId_createdAt` ON `stock_movements` (`branchId`, `productId`, `createdAt`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_sales_branchId_createdAt` ON `sales` (`branchId`, `createdAt`)")
+                db.execSQL("CREATE INDEX IF NOT EXISTS `index_purchases_branchId_supplierId` ON `purchases` (`branchId`, `supplierId`)")
             }
         }
     }

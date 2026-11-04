@@ -56,4 +56,29 @@ class SalesImportParserTest {
         assertTrue(result.errors.any { it.message.contains("duplicated") })
         assertTrue(result.errors.any { it.message.contains("Quantity") })
     }
+
+    @Test
+    fun parsesPaymentAllocationsLinkedToBills() {
+        val result = SalesImportParser.parse(
+            "bill_id,date,payment_mode,total\nA,2026-11-02,CREDIT,30.00\n",
+            "bill_id,sku,qty,unit_price\nA,S-1,1,30.00\n",
+            "bill_id,payment_mode,amount,reference\nA,CASH,10.00,cash drawer\nA,UPI,20.00,txn-2\n",
+        )
+
+        assertTrue(result.errors.toString(), result.errors.isEmpty())
+        assertEquals(2, result.payments.size)
+        assertEquals(PaymentMethod.CASH, result.payments[0].method)
+        assertEquals(1_000L, result.payments[0].amountPaise)
+        assertEquals("txn-2", result.payments[1].reference)
+    }
+
+    @Test
+    fun splitSummaryRequiresLinkedPaymentRows() {
+        val result = SalesImportParser.parse(
+            "bill_id,date,payment_mode,total\nA,2026-11-02,SPLIT,30.00\n",
+            "bill_id,sku,qty,unit_price\nA,S-1,1,30.00\n",
+        )
+
+        assertTrue(result.errors.any { it.message.contains("no payment rows") })
+    }
 }

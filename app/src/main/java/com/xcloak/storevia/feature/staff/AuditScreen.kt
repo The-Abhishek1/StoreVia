@@ -8,6 +8,9 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -29,6 +32,7 @@ fun AuditAction.label(): String = name.lowercase().replace('_', ' ').replaceFirs
 @Composable
 fun AuditScreen(onBack: () -> Unit, vm: AuditViewModel = hiltViewModel()) {
     val rows by vm.rows.collectAsStateWithLifecycle()
+    var query by remember { mutableStateOf("") }
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
@@ -46,17 +50,39 @@ fun AuditScreen(onBack: () -> Unit, vm: AuditViewModel = hiltViewModel()) {
                 Spacer(Modifier.height(8.dp))
                 Text(stringResource(R.string.audit_empty_hint), style = MaterialTheme.typography.bodyMedium)
             }
-            else -> LazyColumn(Modifier.padding(padding)) {
-                item { Text(stringResource(R.string.audit_hint), Modifier.padding(16.dp, 8.dp), style = MaterialTheme.typography.bodySmall) }
-                items(list, key = { it.id }) { e ->
-                    ListItem(
-                        headlineContent = { Text(e.summary) },
-                        supportingContent = {
-                            Text(e.actorName + " · " + e.actorRole.lowercase() + " · " +
-                                Instant.ofEpochMilli(e.createdAt).atZone(ZoneId.systemDefault()).format(WHEN) + " · " + e.action.label())
-                        },
+            else -> {
+                val filtered = list.filter {
+                    val q = query.trim()
+                    q.isEmpty() || it.summary.contains(q, ignoreCase = true) ||
+                        it.actorName.contains(q, ignoreCase = true) || it.action.label().contains(q, ignoreCase = true)
+                }
+                Column(Modifier.padding(padding).fillMaxSize()) {
+                    OutlinedTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        singleLine = true,
+                        label = { Text(stringResource(R.string.audit_search_hint)) },
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
                     )
-                    HorizontalDivider()
+                    if (filtered.isEmpty()) {
+                        Text(
+                            stringResource(R.string.audit_no_matches),
+                            Modifier.fillMaxWidth().padding(24.dp),
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    } else LazyColumn(Modifier.weight(1f)) {
+                        item { Text(stringResource(R.string.audit_hint), Modifier.padding(16.dp, 8.dp), style = MaterialTheme.typography.bodySmall) }
+                        items(filtered, key = { it.id }) { e ->
+                            ListItem(
+                                headlineContent = { Text(e.summary) },
+                                supportingContent = {
+                                    Text(e.actorName + " · " + e.actorRole.lowercase() + " · " +
+                                        Instant.ofEpochMilli(e.createdAt).atZone(ZoneId.systemDefault()).format(WHEN) + " · " + e.action.label())
+                                },
+                            )
+                            HorizontalDivider()
+                        }
+                    }
                 }
             }
         }

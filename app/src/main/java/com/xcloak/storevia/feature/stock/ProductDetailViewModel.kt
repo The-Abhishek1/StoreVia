@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.xcloak.storevia.R
 import com.xcloak.storevia.core.database.dao.BatchDao
+import com.xcloak.storevia.core.database.dao.BranchDao
 import com.xcloak.storevia.core.database.dao.ProductDao
 import com.xcloak.storevia.core.database.dao.ProductVariantRow
 import com.xcloak.storevia.core.database.dao.RecipeComponentRow
@@ -55,12 +56,14 @@ private data class DetailBase(
 )
 
 @HiltViewModel
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class ProductDetailViewModel @Inject constructor(
     handle: SavedStateHandle,
     productDao: ProductDao,
     private val unitDao: UnitDao,
     batchDao: BatchDao,
     stockDao: StockMovementDao,
+    branchDao: BranchDao,
     recipeDao: RecipeDao,
     serialNumberDao: SerialNumberDao,
     private val receiveStock: ReceiveStockUseCase,
@@ -79,22 +82,25 @@ class ProductDetailViewModel @Inject constructor(
     val ingredientOptions: StateFlow<List<ProductEntity>> =
         productDao.observeActiveSellable().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    private val base = combine(
-        productDao.observeById(id),
-        unitDao.observeAll(),
-        batchDao.observeForProduct(id),
-        productDao.observeBarcode(id),
-        stockDao.observeForProduct(id, 30),
-    ) { product, units, batches, barcode, movements ->
-        DetailBase(product, units, batches, barcode, movements)
+    private val activeBranchId = branchDao.observeSelectedId().map { it ?: "default" }.distinctUntilChanged()
+    private val base = activeBranchId.flatMapLatest { branchId ->
+        combine(
+            productDao.observeById(id),
+            unitDao.observeAll(),
+            batchDao.observeForProduct(id, branchId),
+            productDao.observeBarcode(id),
+            stockDao.observeForProductAtBranch(id, branchId, 30),
+        ) { product, units, batches, barcode, movements ->
+            DetailBase(product, units, batches, barcode, movements)
+        }
     }
 
     val ui: StateFlow<DetailUi?> = combine(
         base,
-        productDao.observeVariants(id),
+        activeBranchId.flatMapLatest { productDao.observeVariants(id, it) },
         stockDao.observeMovementCount(id),
         recipeDao.observeForProduct(id),
-        serialNumberDao.observeForProduct(id),
+        activeBranchId.flatMapLatest { serialNumberDao.observeForProduct(id, it) },
     ) { detail, variants, movementCount, recipeComponents, serialNumbers ->
         detail.product?.takeIf { it.deletedAt == null }?.let { p ->
             DetailUi(

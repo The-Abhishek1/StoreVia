@@ -14,6 +14,9 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
@@ -38,6 +41,7 @@ fun MoreScreen(
 ) {
     val actor = LocalActor.current
     val staffMode by access.staffMode.collectAsStateWithLifecycle()
+    var query by remember { mutableStateOf("") }
 
     val items = listOf(
         MenuItem(Icons.Filled.People, R.string.more_customers, R.string.more_customers_hint, { Permission.MANAGE_CUSTOMERS in it }, onCustomers),
@@ -53,6 +57,9 @@ fun MoreScreen(
         MenuItem(Icons.Filled.History, R.string.more_audit, R.string.more_audit_hint, { Permission.VIEW_AUDIT in it }, onAudit),
         MenuItem(Icons.Filled.Cloud, R.string.more_cloud_account, R.string.more_cloud_account_hint, { true }, onCloudAccount),
     ).filter { it.allowed(actor.permissions) }
+    val visibleItems = items.map { item ->
+        item to (stringResource(item.title) + " " + stringResource(item.hint))
+    }.filter { (_, text) -> query.isBlank() || text.contains(query.trim(), ignoreCase = true) }
 
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp),
@@ -60,6 +67,13 @@ fun MoreScreen(
     ) {
         Text(stringResource(R.string.more_screen_title), style = MaterialTheme.typography.titleLarge)
         Text(stringResource(R.string.more_screen_hint), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        OutlinedTextField(
+            value = query,
+            onValueChange = { query = it },
+            singleLine = true,
+            label = { Text(stringResource(R.string.more_search_hint)) },
+            modifier = Modifier.fillMaxWidth(),
+        )
         if (staffMode) {
             Card(Modifier.fillMaxWidth()) {
                 ListItem(
@@ -68,7 +82,15 @@ fun MoreScreen(
                 )
             }
         }
-        items.forEach { m ->
+        if (visibleItems.isEmpty()) {
+            Text(
+                stringResource(R.string.more_no_matches),
+                Modifier.padding(vertical = 12.dp),
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        visibleItems.forEach { (m, _) ->
             Card(Modifier.fillMaxWidth().clickable(onClick = m.onClick)) {
                 ListItem(
                     leadingContent = { Icon(m.icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary) },

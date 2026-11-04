@@ -87,11 +87,19 @@ fun ReportsScreen(vm: ReportsViewModel = hiltViewModel()) {
                         vm.setCustomerFilter(null)
                         vm.setTaxRateFilter(null)
                         vm.setSupplierFilter(null)
+                        vm.setBranchFilter(null)
                     },
                     enabled = ui.filters != ReportFilters(),
                 ) { Text(stringResource(R.string.report_clear_filters)) }
             }
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                ReportFilterDropdown(
+                    label = stringResource(R.string.report_filter_branch),
+                    allLabel = stringResource(R.string.report_filter_all_branches),
+                    selectedId = ui.filters.branchId,
+                    options = ui.filterOptions.branches,
+                    onSelect = vm::setBranchFilter,
+                )
                 ReportFilterDropdown(
                     label = stringResource(R.string.report_filter_product),
                     allLabel = stringResource(R.string.report_filter_all),

@@ -10,6 +10,7 @@ import java.time.format.DateTimeParseException
 data class SalesImportSummary(
     val line: Int,
     val billId: String,
+    val branchName: String?,
     val date: LocalDate,
     val customerName: String?,
     val paymentMethod: PaymentMethod?,
@@ -28,11 +29,20 @@ data class SalesImportLine(
     val unitPricePaise: Long,
 )
 
+data class SalesImportPayment(
+    val line: Int,
+    val billId: String,
+    val method: PaymentMethod,
+    val amountPaise: Long,
+    val reference: String?,
+)
+
 data class SalesImportRowError(val line: Int, val message: String)
 
 data class SalesImportDocument(
     val summaries: List<SalesImportSummary>,
     val lines: List<SalesImportLine>,
+    val payments: List<SalesImportPayment>,
     val errors: List<SalesImportRowError>,
 )
 
@@ -44,12 +54,13 @@ object SalesImportParser {
         DateTimeFormatter.ofPattern("MM/dd/yyyy"),
     )
 
-    fun parse(summaryCsv: String, lineCsv: String): SalesImportDocument {
+    fun parse(summaryCsv: String, lineCsv: String, paymentCsv: String? = null): SalesImportDocument {
         val errors = mutableListOf<SalesImportRowError>()
         val summaryRows = Csv.parse(summaryCsv)
         val itemRows = Csv.parse(lineCsv)
         val summaries = parseSummaries(summaryRows, errors)
         val lines = parseLines(itemRows, errors)
+        val payments = paymentCsv?.let { parsePayments(Csv.parse(it), errors) }.orEmpty()
 
         val billIds = summaries.map { it.billId }.toSet()
         val groupedLineIds = lines.map { it.billId }.toSet()
@@ -59,7 +70,14 @@ object SalesImportParser {
         summaries.filter { it.billId !in groupedLineIds }.forEach {
             errors += SalesImportRowError(it.line, "Bill '${it.billId}' has no line items.")
         }
-        return SalesImportDocument(summaries, lines, errors)
+        payments.filter { it.billId !in billIds }.forEach {
+            errors += SalesImportRowError(it.line, "Payment refers to bill '${it.billId}', which is missing from the sales summary.")
+        }
+        val paymentBills = payments.map { it.billId }.toSet()
+        summaries.filter { it.paymentMethod == null && !it.isCredit && it.billId !in paymentBills }.forEach {
+            errors += SalesImportRowError(it.line, "Split-payment bill '${it.billId}' has no payment rows.")
+        }
+        return SalesImportDocument(summaries, lines, payments, errors)
     }
 
     private fun parseSummaries(
@@ -72,6 +90,7 @@ object SalesImportParser {
         }
         val headers = table.first().mapIndexed { index, value -> normalize(value) to index }.toMap()
         val billColumn = headers.firstIndex("billid", "invoice", "invoiceid")
+        val branchColumn = headers.firstIndex("branch", "branchname", "location")
         val dateColumn = headers.firstIndex("date")
         val paymentColumn = headers.firstIndex("paymentmode", "paymentmethod")
         val totalColumn = headers.firstIndex("total")
@@ -100,13 +119,51 @@ object SalesImportParser {
             if (billId.isBlank()) { errors += SalesImportRowError(line, "Bill ID is required."); invalid = true }
             if (billId.isNotBlank() && !seen.add(billId)) { errors += SalesImportRowError(line, "Bill ID '$billId' is duplicated."); invalid = true }
             if (date == null) { errors += SalesImportRowError(line, "Date '$rawDate' is invalid."); invalid = true }
-            if (mode == null) { errors += SalesImportRowError(line, "Payment mode must be CASH, UPI, CARD, OTHER, or CREDIT."); invalid = true }
+            if (mode == null) { errors += SalesImportRowError(line, "Payment mode must be CASH, UPI, CARD, OTHER, CREDIT, or SPLIT."); invalid = true }
             if (total == null) { errors += SalesImportRowError(line, "Total is invalid."); invalid = true }
             if (discount == null) { errors += SalesImportRowError(line, "Discount is invalid."); invalid = true }
             if (tax == null) { errors += SalesImportRowError(line, "Tax is invalid."); invalid = true }
             if (invalid) null else SalesImportSummary(
-                line, billId, checkNotNull(date), value(customerColumn).ifBlank { null },
+                line, billId, value(branchColumn).ifBlank { null }, checkNotNull(date), value(customerColumn).ifBlank { null },
                 mode?.first, checkNotNull(mode).second, checkNotNull(discount), checkNotNull(tax), checkNotNull(total),
+            )
+        }
+    }
+
+    private fun parsePayments(
+        table: List<List<String>>,
+        errors: MutableList<SalesImportRowError>,
+    ): List<SalesImportPayment> {
+        if (table.isEmpty()) {
+            errors += SalesImportRowError(1, "Payments file is empty.")
+            return emptyList()
+        }
+        val headers = table.first().mapIndexed { index, value -> normalize(value) to index }.toMap()
+        val billColumn = headers.firstIndex("billid", "invoice", "invoiceid")
+        val methodColumn = headers.firstIndex("paymentmode", "paymentmethod", "method")
+        val amountColumn = headers.firstIndex("amount", "amountpaid")
+        val referenceColumn = headers.firstIndex("reference", "ref")
+        val required = listOf("bill_id" to billColumn, "payment_mode" to methodColumn, "amount" to amountColumn)
+        required.filter { it.second == null }.forEach { (name) ->
+            errors += SalesImportRowError(1, "Payments file is missing required column '$name'.")
+        }
+        if (required.any { it.second == null }) return emptyList()
+
+        return table.drop(1).mapIndexedNotNull { index, row ->
+            val line = index + 2
+            fun value(column: Int?) = column?.let { row.getOrNull(it)?.trim().orEmpty() }.orEmpty()
+            val billId = value(billColumn)
+            val mode = parsePayment(value(methodColumn))
+            val amount = Parsing.moneyToPaise(value(amountColumn))
+            var invalid = false
+            if (billId.isBlank()) { errors += SalesImportRowError(line, "Bill ID is required."); invalid = true }
+            if (mode == null || mode.second) {
+                errors += SalesImportRowError(line, "Payment mode must be CASH, UPI, CARD, or OTHER.")
+                invalid = true
+            }
+            if (amount == null || amount <= 0) { errors += SalesImportRowError(line, "Payment amount must be positive."); invalid = true }
+            if (invalid) null else SalesImportPayment(
+                line, billId, checkNotNull(mode).first!!, checkNotNull(amount), value(referenceColumn).ifBlank { null },
             )
         }
     }
@@ -163,6 +220,7 @@ object SalesImportParser {
         "card", "creditcard", "debitcard" -> PaymentMethod.CARD to false
         "other" -> PaymentMethod.OTHER to false
         "credit", "khata", "onaccount" -> null to true
+        "split", "partial" -> null to false
         else -> null
     }
 

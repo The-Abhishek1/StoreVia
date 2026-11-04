@@ -89,6 +89,10 @@ class BackupViewModel @Inject constructor(
     }
 
     fun startRestore(uri: Uri) = viewModelScope.launch {
+        if (!access.actor().can(Permission.RESTORE)) {
+            _ui.update { it.copy(message = R.string.err_permission_denied) }
+            return@launch
+        }
         _ui.update { it.copy(busy = true) }
         val bytes = try {
             withContext(Dispatchers.IO) { context.contentResolver.openInputStream(uri)?.use { readCapped(it) } }
@@ -98,6 +102,10 @@ class BackupViewModel @Inject constructor(
     }
 
     fun startRestore(file: File) = viewModelScope.launch {
+        if (!access.actor().can(Permission.RESTORE)) {
+            _ui.update { it.copy(message = R.string.err_permission_denied) }
+            return@launch
+        }
         _ui.update { it.copy(busy = true) }
         val bytes = try { withContext(Dispatchers.IO) { file.readBytes() } } catch (_: Exception) { null }
         if (bytes == null) { _ui.update { it.copy(busy = false, message = R.string.restore_read_failed) }; return@launch }

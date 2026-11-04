@@ -12,11 +12,13 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.*
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.SavedStateHandle
@@ -33,6 +35,7 @@ import com.xcloak.storevia.core.util.Parsing
 import com.xcloak.storevia.domain.purchase.ReorderPlanner
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -44,16 +47,32 @@ private fun Long.asDate() = Instant.ofEpochMilli(this).atZone(ZoneId.systemDefau
 // ------------------------------------------------------------------ purchase list
 
 @HiltViewModel
-class PurchasesListViewModel @Inject constructor(dao: PurchaseDao) : ViewModel() {
-    val rows: StateFlow<List<PurchaseListRow>?> = dao.observeRecent()
+@OptIn(ExperimentalCoroutinesApi::class)
+class PurchasesListViewModel @Inject constructor(dao: PurchaseDao, branchDao: BranchDao) : ViewModel() {
+    private val _query = MutableStateFlow("")
+    private val _unpaidOnly = MutableStateFlow(false)
+    val query: StateFlow<String> = _query.asStateFlow()
+    val unpaidOnly: StateFlow<Boolean> = _unpaidOnly.asStateFlow()
+
+    val rows: StateFlow<List<PurchaseListRow>?> = combine(
+        branchDao.observeSelectedId().map { it ?: "default" }.distinctUntilChanged(),
+        _query,
+        _unpaidOnly,
+    ) { branchId, query, unpaidOnly -> Triple(branchId, query.trim(), unpaidOnly) }
+        .flatMapLatest { (branchId, query, unpaidOnly) -> dao.observeRecent(200, branchId, query, unpaidOnly) }
         .map<List<PurchaseListRow>, List<PurchaseListRow>?> { it }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    fun setQuery(value: String) { _query.value = value }
+    fun setUnpaidOnly(value: Boolean) { _unpaidOnly.value = value }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PurchasesListScreen(onBack: () -> Unit, onNew: () -> Unit, onOpen: (String) -> Unit, vm: PurchasesListViewModel = hiltViewModel()) {
     val rows by vm.rows.collectAsStateWithLifecycle()
+    val query by vm.query.collectAsStateWithLifecycle()
+    val unpaidOnly by vm.unpaidOnly.collectAsStateWithLifecycle()
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         topBar = {
@@ -64,23 +83,49 @@ fun PurchasesListScreen(onBack: () -> Unit, onNew: () -> Unit, onOpen: (String) 
         },
         floatingActionButton = { ExtendedFloatingActionButton(onClick = onNew, icon = { Icon(Icons.Filled.Add, null) }, text = { Text(stringResource(R.string.new_purchase)) }) },
     ) { padding ->
-        val list = rows
-        when {
-            list == null -> LoadingState(Modifier.padding(padding))
-            list.isEmpty() -> Column(Modifier.padding(padding).fillMaxSize().padding(32.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(stringResource(R.string.purchases_empty), style = MaterialTheme.typography.titleMedium)
-                Spacer(Modifier.height(8.dp))
-                Text(stringResource(R.string.purchases_empty_hint), style = MaterialTheme.typography.bodyMedium)
-            }
-            else -> LazyColumn(Modifier.padding(padding), contentPadding = PaddingValues(bottom = 96.dp)) {
-                items(list, key = { it.id }) { r ->
-                    ListItem(
-                        modifier = Modifier.clickable { onOpen(r.id) },
-                        headlineContent = { Text(r.supplierName ?: stringResource(R.string.cash_purchase), style = MaterialTheme.typography.titleMedium) },
-                        supportingContent = { Text(listOfNotNull(r.invoiceNo, r.purchaseDate.asDate()).joinToString(" · ")) },
-                        trailingContent = { Text(Money(r.totalPaise).format(), style = MaterialTheme.typography.titleMedium) },
+        Column(Modifier.padding(padding).fillMaxSize()) {
+            OutlinedTextField(
+                value = query,
+                onValueChange = vm::setQuery,
+                singleLine = true,
+                label = { Text(stringResource(R.string.purchases_search_hint)) },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            )
+            FilterChip(
+                selected = unpaidOnly,
+                onClick = { vm.setUnpaidOnly(!unpaidOnly) },
+                label = { Text(stringResource(R.string.purchases_unpaid_filter)) },
+                modifier = Modifier.padding(horizontal = 16.dp),
+            )
+            val list = rows
+            when {
+                list == null -> LoadingState(Modifier.weight(1f).fillMaxWidth())
+                list.isEmpty() -> Column(Modifier.weight(1f).fillMaxWidth().padding(32.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        stringResource(if (query.isBlank() && !unpaidOnly) R.string.purchases_empty else R.string.purchases_no_matches),
+                        style = MaterialTheme.typography.titleMedium,
                     )
-                    HorizontalDivider()
+                    if (query.isBlank() && !unpaidOnly) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(stringResource(R.string.purchases_empty_hint), style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+                else -> LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 96.dp)) {
+                    items(list, key = { it.id }) { r ->
+                        ListItem(
+                            modifier = Modifier.clickable { onOpen(r.id) },
+                            headlineContent = { Text(r.supplierName ?: stringResource(R.string.cash_purchase), style = MaterialTheme.typography.titleMedium) },
+                            supportingContent = {
+                                Text(
+                                    listOfNotNull(r.invoiceNo, r.purchaseDate.asDate()).joinToString(" · ") +
+                                        if (r.paidPaise < r.totalPaise) " · ${stringResource(R.string.purchase_balance_due, Money(r.totalPaise - r.paidPaise).format())}" else "",
+                                )
+                            },
+                            trailingContent = { Text(Money(r.totalPaise).format(), style = MaterialTheme.typography.titleMedium) },
+                        )
+                        HorizontalDivider()
+                    }
                 }
             }
         }
@@ -141,8 +186,15 @@ fun PurchaseDetailScreen(onBack: () -> Unit, vm: PurchaseDetailViewModel = hiltV
 data class ReorderUi(val storeName: String, val rows: List<ReorderRow>)
 
 @HiltViewModel
-class ReorderViewModel @Inject constructor(reportDao: ReportDao, storeDao: StoreDao) : ViewModel() {
-    val ui: StateFlow<ReorderUi?> = combine(reportDao.reorderRows(), storeDao.observe()) { rows, store -> ReorderUi(store?.name.orEmpty(), rows) }
+@OptIn(ExperimentalCoroutinesApi::class)
+class ReorderViewModel @Inject constructor(reportDao: ReportDao, storeDao: StoreDao, branchDao: BranchDao) : ViewModel() {
+    val ui: StateFlow<ReorderUi?> = combine(
+        branchDao.observeSelectedId().map { it ?: "default" }.distinctUntilChanged(),
+        storeDao.observe(),
+    ) { branchId, store -> branchId to store }
+        .flatMapLatest { (branchId, store) ->
+            reportDao.reorderRows(branchId).map { rows -> ReorderUi(store?.name.orEmpty(), rows) }
+        }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 }
 

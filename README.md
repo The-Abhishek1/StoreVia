@@ -30,9 +30,14 @@ to apply a schema update. Every later schema change needs an additive Room migra
 - Serial tracking is available for whole-unit products. Receiving through stock-in or purchase entry records one
   unique serial per unit; checkout assigns serials and returns release them for resale.
 - Relational sales import supports historical-only or live stock deduction, including recipe and serial-tracked
-  products. Exports support CSV, paginated PDF, numeric/filterable XLSX, and tabular DOCX.
-- Reports can filter by supplier based on purchase history. Branch filtering is not available until multi-branch
-  support is added to the data model.
+  products. Sales summary, line-item, and optional payment CSVs preserve each payment method and amount on split
+  bills. Exports support CSV, paginated PDF, numeric/filterable XLSX, and tabular DOCX.
+- Branches share the product catalog, but stock batches, stock movements, purchases, and sales are assigned to a
+  branch. The current branch is selected per device in Store Settings; report filters can show one branch or all
+  branches. Existing single-store data migrates into the original store's default branch.
+- Sales exports include branch names and separate payment allocations; sales imports map exported branch names to
+  existing branches and reject unknown branches. Reports can filter by supplier based on purchase history and by
+  branch.
 
 ## Cloud sync (v1.0a)
 - `core/sync/` is the engine: it pushes rows marked `dirty` and pulls rows newer than a saved server timestamp, per table.

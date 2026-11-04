@@ -4,6 +4,7 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.xcloak.storevia.core.database.dao.CategoryDao
+import com.xcloak.storevia.core.database.dao.BranchDao
 import com.xcloak.storevia.core.database.dao.ProductDao
 import com.xcloak.storevia.core.database.dao.ProductListRow
 import com.xcloak.storevia.core.database.entity.CategoryEntity
@@ -18,6 +19,7 @@ import javax.inject.Inject
 class StockListViewModel @Inject constructor(
     productDao: ProductDao,
     categoryDao: CategoryDao,
+    branchDao: BranchDao,
     private val handle: SavedStateHandle,
 ) : ViewModel() {
 
@@ -30,8 +32,13 @@ class StockListViewModel @Inject constructor(
     val categories: StateFlow<List<CategoryEntity>> =
         categoryDao.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    val rows: StateFlow<List<ProductListRow>?> = combine(_query, _category) { q, c -> q.trim() to c }
-        .flatMapLatest { (q, c) -> if (c == null) productDao.listWithStock(q) else productDao.listWithStockByCategory(q, c) }
+    private val activeBranchId = branchDao.observeSelectedId().map { it ?: "default" }.distinctUntilChanged()
+
+    val rows: StateFlow<List<ProductListRow>?> = combine(_query, _category, activeBranchId) { q, c, branchId ->
+        Triple(q.trim(), c, branchId)
+    }.flatMapLatest { (q, c, branchId) ->
+        if (c == null) productDao.listWithStock(q, branchId) else productDao.listWithStockByCategory(q, c, branchId)
+    }
         .map<List<ProductListRow>, List<ProductListRow>?> { it }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 

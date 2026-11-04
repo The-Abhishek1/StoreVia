@@ -24,6 +24,7 @@ import com.xcloak.storevia.core.ui.LoadingState
 @Composable
 fun CategoriesScreen(onBack: () -> Unit, vm: CategoriesViewModel = hiltViewModel()) {
     val rows by vm.rows.collectAsStateWithLifecycle()
+    var query by remember { mutableStateOf("") }
     var editing by remember { mutableStateOf<CategoryRow?>(null) }
     var adding by remember { mutableStateOf(false) }
     var deleting by remember { mutableStateOf<CategoryRow?>(null) }
@@ -42,29 +43,45 @@ fun CategoriesScreen(onBack: () -> Unit, vm: CategoriesViewModel = hiltViewModel
         },
     ) { padding ->
         val list = rows
+        val filtered = list?.filter { it.category.name.contains(query.trim(), ignoreCase = true) }
         when {
             list == null -> LoadingState(Modifier.padding(padding))
-            list.isEmpty() -> Column(
-                Modifier.padding(padding).fillMaxSize().padding(32.dp),
-                verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Text(stringResource(R.string.categories_empty), style = MaterialTheme.typography.titleMedium)
-                Spacer(Modifier.height(8.dp))
-                Text(stringResource(R.string.categories_empty_hint), style = MaterialTheme.typography.bodyMedium)
-            }
-            else -> LazyColumn(Modifier.padding(padding), contentPadding = PaddingValues(bottom = 96.dp)) {
-                items(list, key = { it.category.id }) { r ->
-                    ListItem(
-                        headlineContent = { Text(r.category.name, style = MaterialTheme.typography.titleMedium) },
-                        supportingContent = { Text(stringResource(R.string.category_products, r.productCount)) },
-                        trailingContent = {
-                            Row {
-                                IconButton(onClick = { editing = r }) { Icon(Icons.Filled.Edit, stringResource(R.string.edit)) }
-                                IconButton(onClick = { deleting = r }) { Icon(Icons.Filled.Delete, stringResource(R.string.delete)) }
-                            }
-                        },
-                    )
-                    HorizontalDivider()
+            else -> Column(Modifier.padding(padding).fillMaxSize()) {
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    singleLine = true,
+                    label = { Text(stringResource(R.string.categories_search_hint)) },
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                )
+                if (filtered.isNullOrEmpty()) {
+                    Column(
+                        Modifier.weight(1f).fillMaxWidth().padding(32.dp),
+                        verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        Text(
+                            stringResource(if (list.isEmpty()) R.string.categories_empty else R.string.categories_no_matches),
+                            style = MaterialTheme.typography.titleMedium,
+                        )
+                        if (list.isEmpty()) {
+                            Spacer(Modifier.height(8.dp))
+                            Text(stringResource(R.string.categories_empty_hint), style = MaterialTheme.typography.bodyMedium)
+                        }
+                    }
+                } else LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 96.dp)) {
+                    items(filtered, key = { it.category.id }) { r ->
+                        ListItem(
+                            headlineContent = { Text(r.category.name, style = MaterialTheme.typography.titleMedium) },
+                            supportingContent = { Text(stringResource(R.string.category_products, r.productCount)) },
+                            trailingContent = {
+                                Row {
+                                    IconButton(onClick = { editing = r }) { Icon(Icons.Filled.Edit, stringResource(R.string.edit)) }
+                                    IconButton(onClick = { deleting = r }) { Icon(Icons.Filled.Delete, stringResource(R.string.delete)) }
+                                }
+                            },
+                        )
+                        HorizontalDivider()
+                    }
                 }
             }
         }

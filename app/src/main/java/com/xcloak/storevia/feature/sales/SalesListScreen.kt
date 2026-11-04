@@ -21,12 +21,13 @@ import androidx.lifecycle.viewModelScope
 import com.xcloak.storevia.core.ui.LoadingState
 import com.xcloak.storevia.R
 import com.xcloak.storevia.core.database.dao.SaleDao
+import com.xcloak.storevia.core.database.dao.BranchDao
 import com.xcloak.storevia.core.database.entity.SaleEntity
 import com.xcloak.storevia.core.money.Money
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.flow.stateIn
 import java.time.Instant
 import java.time.ZoneId
@@ -34,8 +35,10 @@ import java.time.format.DateTimeFormatter
 import javax.inject.Inject
 
 @HiltViewModel
-class SalesListViewModel @Inject constructor(saleDao: SaleDao) : ViewModel() {
-    val sales: StateFlow<List<SaleEntity>?> = saleDao.observeRecent(200)
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+class SalesListViewModel @Inject constructor(saleDao: SaleDao, branchDao: BranchDao) : ViewModel() {
+    val sales: StateFlow<List<SaleEntity>?> = branchDao.observeSelectedId().map { it ?: "default" }
+        .distinctUntilChanged().flatMapLatest { branchId -> saleDao.observeRecent(200, branchId) }
         .map<List<SaleEntity>, List<SaleEntity>?> { it }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 }

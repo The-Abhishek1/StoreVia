@@ -346,6 +346,33 @@ create policy "writers insert" on public."store" for insert with check (public.c
 drop policy if exists "writers update" on public."store";
 create policy "writers update" on public."store" for update using (public.can_write(store_id, array['OWNER'])) with check (public.can_write(store_id, array['OWNER']));
 
+-- branches: mutable
+create table if not exists public."branches" (
+  "id" text not null,
+  "name" text not null,
+  "address" text not null,
+  "city" text not null,
+  "phone" text not null,
+  "is_active" integer not null,
+  "created_at" bigint not null,
+  "updated_at" bigint not null,
+  "deleted_at" bigint,
+  store_id text not null,
+  server_updated_at timestamptz not null default clock_timestamp(),
+  primary key ("id")
+);
+create unique index if not exists "branches_store_name_unique" on public."branches" (store_id, "name");
+create index if not exists "branches_sync_idx" on public."branches" (store_id, server_updated_at, "id");
+drop trigger if exists touch_server_updated_at on public."branches";
+create trigger touch_server_updated_at before insert or update on public."branches" for each row execute function public.touch_server_updated_at();
+alter table public."branches" enable row level security;
+drop policy if exists "members read" on public."branches";
+create policy "members read" on public."branches" for select using (public.is_member(store_id));
+drop policy if exists "writers insert" on public."branches";
+create policy "writers insert" on public."branches" for insert with check (public.can_write(store_id, array['OWNER','MANAGER']));
+drop policy if exists "writers update" on public."branches";
+create policy "writers update" on public."branches" for update using (public.can_write(store_id, array['OWNER','MANAGER'])) with check (public.can_write(store_id, array['OWNER','MANAGER']));
+
 -- units: mutable
 create table if not exists public."units" (
   "id" text not null,
@@ -506,6 +533,7 @@ create policy "writers update" on public."product_barcodes" for update using (pu
 create table if not exists public."batches" (
   "id" text not null,
   "product_id" text not null,
+  "branch_id" text not null,
   "batch_no" text,
   "expiry_date" text,
   "cost_paise" bigint not null,
@@ -519,6 +547,9 @@ create table if not exists public."batches" (
   server_updated_at timestamptz not null default clock_timestamp(),
   primary key ("id")
 );
+alter table public."batches" add column if not exists "branch_id" text not null default 'default';
+update public."batches" set "branch_id" = store_id where "branch_id" = 'default';
+create index if not exists "batches_branch_idx" on public."batches" (store_id, "branch_id");
 create index if not exists "batches_sync_idx" on public."batches" (store_id, server_updated_at, "id");
 drop trigger if exists touch_server_updated_at on public."batches";
 create trigger touch_server_updated_at before insert or update on public."batches" for each row execute function public.touch_server_updated_at();
@@ -607,6 +638,7 @@ create policy "writers update" on public."staff" for update using (public.can_wr
 create table if not exists public."sales" (
   "id" text not null,
   "invoice_no" text not null,
+  "branch_id" text not null,
   "customer_id" text,
   "status" text not null,
   "inter_state" integer not null,
@@ -625,6 +657,9 @@ create table if not exists public."sales" (
   server_updated_at timestamptz not null default clock_timestamp(),
   primary key ("id")
 );
+alter table public."sales" add column if not exists "branch_id" text not null default 'default';
+update public."sales" set "branch_id" = store_id where "branch_id" = 'default';
+create index if not exists "sales_branch_idx" on public."sales" (store_id, "branch_id");
 create index if not exists "sales_sync_idx" on public."sales" (store_id, server_updated_at, "id");
 drop trigger if exists touch_server_updated_at on public."sales";
 create trigger touch_server_updated_at before insert or update on public."sales" for each row execute function public.touch_server_updated_at();
@@ -743,6 +778,7 @@ create policy "writers insert" on public."sale_return_lines" for insert with che
 create table if not exists public."stock_movements" (
   "id" text not null,
   "product_id" text not null,
+  "branch_id" text not null,
   "batch_id" text,
   "type" text not null,
   "qty_milli" bigint not null,
@@ -755,6 +791,9 @@ create table if not exists public."stock_movements" (
   server_updated_at timestamptz not null default clock_timestamp(),
   primary key ("id")
 );
+alter table public."stock_movements" add column if not exists "branch_id" text not null default 'default';
+update public."stock_movements" set "branch_id" = store_id where "branch_id" = 'default';
+create index if not exists "stock_movements_branch_idx" on public."stock_movements" (store_id, "branch_id");
 create index if not exists "stock_movements_sync_idx" on public."stock_movements" (store_id, server_updated_at, "id");
 drop trigger if exists touch_server_updated_at on public."stock_movements";
 create trigger touch_server_updated_at before insert or update on public."stock_movements" for each row execute function public.touch_server_updated_at();
@@ -789,6 +828,7 @@ create policy "writers insert" on public."customer_ledger" for insert with check
 -- purchases: append-only
 create table if not exists public."purchases" (
   "id" text not null,
+  "branch_id" text not null,
   "supplier_id" text,
   "invoice_no" text,
   "purchase_date" bigint not null,
@@ -801,6 +841,9 @@ create table if not exists public."purchases" (
   server_updated_at timestamptz not null default clock_timestamp(),
   primary key ("id")
 );
+alter table public."purchases" add column if not exists "branch_id" text not null default 'default';
+update public."purchases" set "branch_id" = store_id where "branch_id" = 'default';
+create index if not exists "purchases_branch_idx" on public."purchases" (store_id, "branch_id");
 create index if not exists "purchases_sync_idx" on public."purchases" (store_id, server_updated_at, "id");
 drop trigger if exists touch_server_updated_at on public."purchases";
 create trigger touch_server_updated_at before insert or update on public."purchases" for each row execute function public.touch_server_updated_at();
@@ -879,5 +922,11 @@ drop policy if exists "members read" on public."audit_log";
 create policy "members read" on public."audit_log" for select using (public.is_member(store_id));
 drop policy if exists "writers insert" on public."audit_log";
 create policy "writers insert" on public."audit_log" for insert with check (public.can_write(store_id, array['OWNER','MANAGER','CASHIER']));
+
+-- Existing single-store data becomes that store's first branch.
+insert into public."branches" ("id", "name", "address", "city", "phone", "is_active", "created_at", "updated_at", "deleted_at", store_id)
+select s."id", s."name", s."address", s."city", s."phone", 1, s."created_at", s."updated_at", null, s."id"
+from public."store" s
+on conflict ("id") do nothing;
 
 notify pgrst, 'reload schema';

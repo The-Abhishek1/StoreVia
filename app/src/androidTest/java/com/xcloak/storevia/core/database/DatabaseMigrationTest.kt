@@ -42,4 +42,30 @@ class DatabaseMigrationTest {
             }
         }
     }
+
+    @Test fun version7To8AddsBranchesAndAssignsExistingRowsToDefaultBranch() {
+        val name = "migration-7-8-test"
+        helper.createDatabase(name, 7).use { db ->
+            db.execSQL(
+                """INSERT INTO sales (
+                    id, invoiceNo, status, interState, subtotalPaise, discountPaise, taxPaise, roundOffPaise,
+                    totalPaise, paidPaise, returnedPaise, createdAt, dirty
+                ) VALUES ('sale-1', 'INV-1', 'COMPLETED', 0, 1000, 0, 0, 0, 1000, 1000, 0, 1, 1)""",
+            )
+        }
+
+        helper.runMigrationsAndValidate(name, 8, true, StorviaDatabase.MIGRATION_7_8).use { db ->
+            db.query("SELECT id, selectedOnDevice FROM branches WHERE id = 'default'").use { cursor ->
+                check(cursor.moveToFirst())
+                check(cursor.getInt(1) == 1)
+            }
+            db.query("SELECT branchId FROM sales WHERE id = 'sale-1'").use { cursor ->
+                check(cursor.moveToFirst())
+                check(cursor.getString(0) == "default")
+            }
+            db.query("SELECT branchId FROM batches LIMIT 1").use { cursor ->
+                check(cursor.getColumnIndex("branchId") >= 0)
+            }
+        }
+    }
 }

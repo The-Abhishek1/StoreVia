@@ -7,6 +7,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.xcloak.storevia.R
 import com.xcloak.storevia.core.database.dao.BatchDao
+import com.xcloak.storevia.core.database.dao.BranchDao
 import com.xcloak.storevia.core.database.dao.CustomerDao
 import com.xcloak.storevia.core.database.dao.HeldCartDao
 import com.xcloak.storevia.core.database.dao.ProductDao
@@ -121,6 +122,7 @@ class CheckoutViewModel @Inject constructor(
     private val unitDao: UnitDao,
     private val customerDao: CustomerDao,
     private val heldCartDao: HeldCartDao,
+    private val branchDao: BranchDao,
     private val sale: CompleteSaleUseCase,
 ) : ViewModel() {
 
@@ -136,8 +138,13 @@ class CheckoutViewModel @Inject constructor(
     val heldCarts: StateFlow<List<HeldCartEntity>> =
         heldCartDao.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    val results: StateFlow<List<ProductListRow>> = _ui.map { it.query.trim() }.distinctUntilChanged()
-        .flatMapLatest { q -> if (q.isEmpty()) flowOf(emptyList<ProductListRow>()) else productDao.listWithStock(q).map { it.take(8) } }
+    private val activeBranchId = branchDao.observeSelectedId().map { it ?: "default" }.distinctUntilChanged()
+
+    val results: StateFlow<List<ProductListRow>> = combine(_ui.map { it.query.trim() }.distinctUntilChanged(), activeBranchId) { q, branchId ->
+        q to branchId
+    }.flatMapLatest { (q, branchId) ->
+        if (q.isEmpty()) flowOf(emptyList()) else productDao.listWithStock(q, branchId).map { it.take(8) }
+    }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     private var previewJob: Job? = null
@@ -227,7 +234,7 @@ class CheckoutViewModel @Inject constructor(
     }
 
     fun openBatchPicker(productId: String) = viewModelScope.launch {
-        val options = batchDao.fefoBatches(productId, LocalDate.now())
+        val options = batchDao.fefoBatches(productId, LocalDate.now(), activeBranchId.first())
         _ui.update {
             it.copy(
                 batchOptions = it.batchOptions + (productId to options),

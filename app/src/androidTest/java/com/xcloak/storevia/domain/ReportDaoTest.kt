@@ -27,11 +27,19 @@ class ReportDaoTest {
         val ctx = ApplicationProvider.getApplicationContext<Context>()
         db = Room.inMemoryDatabaseBuilder(ctx, StorviaDatabase::class.java).allowMainThreadQueries().build()
         db.storeDao().upsert(StoreEntity(name = "Test"))
+        db.branchDao().insert(BranchEntity(id = "default", name = "Main", selectedOnDevice = true))
+        db.branchDao().insert(BranchEntity(id = "branch-2", name = "Second"))
         val unit = UnitEntity(name = "Piece", symbol = "pcs", allowDecimal = false)
         db.unitDao().insertAll(listOf(unit))
-        val p = ProductEntity(name = "Biscuits", unitId = unit.id, sellPricePaise = 1000, gstRateBp = 1800, taxInclusive = true)
+        val p = ProductEntity(
+            name = "Biscuits", unitId = unit.id, sellPricePaise = 1000,
+            gstRateBp = 1800, taxInclusive = true, minStockMilli = 6_000,
+        )
         db.productDao().insert(p)
         ReceiveStockUseCase(db, db.batchDao(), db.stockMovementDao()).invoke(p.id, 5_000, 700, "A", LocalDate.now().plusDays(10))
+        db.batchDao().insert(
+            BatchEntity(productId = p.id, branchId = "branch-2", qtyReceivedMilli = 2_000, qtyOnHandMilli = 2_000),
+        )
         val sell = CompleteSaleUseCase(db, db.storeDao(), db.productDao(), db.batchDao(), db.stockMovementDao(), db.saleDao(), db.customerDao())
         val saleId = sell(listOf(CartItem(p.id, 2_000, 1000)), listOf(PaymentInput(PaymentMethod.CASH, 2_000)))
         ReturnItemsUseCase(db, db.saleDao(), db.batchDao(), db.stockMovementDao(), db.customerDao())
@@ -69,8 +77,53 @@ class ReportDaoTest {
         val top = dao.topProducts(from, to, 5).first()
         assertEquals(2_000L, top[0].revenuePaise); assertEquals("pcs", top[0].unitSymbol)
         val v = dao.stockValue().first()          // 5 - 2 + 1 = 4 pieces left
-        assertEquals(2_800L, v.costPaise); assertEquals(4_000L, v.retailPaise)
+        assertEquals(2_800L, v.costPaise); assertEquals(6_000L, v.retailPaise)
         val e = dao.expiryBetween(LocalDate.now(), LocalDate.now().plusDays(30)).first()
         assertEquals(1, e.batches); assertEquals(2_800L, e.costPaise)
+    }
+
+    @Test fun reorderRowsUseTheRequestedBranchStock() = runBlocking {
+        val dao = db.reportDao()
+        val main = dao.reorderRows("default").first()
+        val second = dao.reorderRows("branch-2").first()
+        val allBranches = dao.reorderRows().first()
+
+        assertEquals(1, main.size)
+        assertEquals(4_000L, main.single().onHandMilli)
+        assertEquals(1, second.size)
+        assertEquals(2_000L, second.single().onHandMilli)
+        assertEquals(0, allBranches.size)
+    }
+
+    @Test fun dashboardSalesAndStockAlertsStayOnTheirBranch() = runBlocking {
+        db.saleDao().insertSale(
+            SaleEntity(
+                invoiceNo = "SECOND-1",
+                branchId = "branch-2",
+                subtotalPaise = 500,
+                discountPaise = 0,
+                taxPaise = 0,
+                roundOffPaise = 0,
+                totalPaise = 500,
+                paidPaise = 500,
+            ),
+        )
+
+        val mainSales = db.saleDao().observeSummary(from, to, "default").first()
+        val secondSales = db.saleDao().observeSummary(from, to, "branch-2").first()
+        val mainLowStock = db.batchDao().observeLowStock("default").first()
+        val secondLowStock = db.batchDao().observeLowStock("branch-2").first()
+        val today = LocalDate.now()
+        val mainExpiring = db.batchDao().observeExpiringCount(today, today.plusDays(30), "default").first()
+        val secondExpiring = db.batchDao().observeExpiringCount(today, today.plusDays(30), "branch-2").first()
+
+        assertEquals(2_000L, mainSales.totalPaise)
+        assertEquals(1, mainSales.count)
+        assertEquals(500L, secondSales.totalPaise)
+        assertEquals(1, secondSales.count)
+        assertEquals(1, mainLowStock.size)
+        assertEquals(1, secondLowStock.size)
+        assertEquals(1, mainExpiring)
+        assertEquals(0, secondExpiring)
     }
 }

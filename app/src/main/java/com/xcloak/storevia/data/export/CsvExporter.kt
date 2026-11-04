@@ -17,7 +17,8 @@ import javax.inject.Inject
 
 enum class ExportKind(val fileName: String) {
     PRODUCTS("storevia-products.csv"), STOCK("storevia-stock-batches.csv"),
-    SALES("storevia-sales.csv"), SALES_LINES("storevia-sales-lines.csv"), CUSTOMERS("storevia-customers.csv"),
+    SALES("storevia-sales.csv"), SALES_LINES("storevia-sales-lines.csv"), PAYMENTS("storevia-sales-payments.csv"),
+    CUSTOMERS("storevia-customers.csv"),
     TEMPLATE("storevia-product-import-template.csv"),
 }
 
@@ -40,6 +41,7 @@ class CsvExporter @Inject constructor(
         ExportKind.STOCK -> stock()
         ExportKind.SALES -> sales()
         ExportKind.SALES_LINES -> salesLines()
+        ExportKind.PAYMENTS -> salesPayments()
         ExportKind.CUSTOMERS -> customers()
         ExportKind.TEMPLATE -> template()
     }
@@ -75,18 +77,25 @@ class CsvExporter @Inject constructor(
         }
     )
 
+    private suspend fun salesPayments(): String = Csv.write(
+        listOf(listOf("bill_id", "payment_mode", "amount", "reference")) +
+            exportDao.salePayments().map {
+                listOf(it.invoiceNo, it.method, Parsing.paiseToPlain(it.amountPaise), Csv.safe(it.reference.orEmpty()))
+            },
+    )
+
     private suspend fun stock(): String = Csv.write(
-        listOf(listOf("product", "unit", "batch_no", "expiry", "quantity", "cost")) + exportDao.batches().map {
-            listOf(Csv.safe(it.productName), it.unitSymbol, Csv.safe(it.batchNo.orEmpty()), it.expiryDate?.toString().orEmpty(),
+        listOf(listOf("branch", "product", "unit", "batch_no", "expiry", "quantity", "cost")) + exportDao.batches().map {
+            listOf(Csv.safe(it.branchName), Csv.safe(it.productName), it.unitSymbol, Csv.safe(it.batchNo.orEmpty()), it.expiryDate?.toString().orEmpty(),
                 Parsing.milliToInput(it.qtyOnHandMilli), Parsing.paiseToPlain(it.costPaise))
         }
     )
 
     private suspend fun sales(): String = Csv.write(
-        listOf(listOf("bill_id", "date", "customer", "payment_mode", "status", "taxable_value", "tax", "discount", "round_off", "total", "returned", "paid", "due")) +
+        listOf(listOf("bill_id", "branch", "date", "customer", "payment_mode", "status", "taxable_value", "tax", "discount", "round_off", "total", "returned", "paid", "due")) +
             exportDao.sales().map {
                 listOf(
-                    it.invoiceNo, Instant.ofEpochMilli(it.createdAt).atZone(ZoneId.systemDefault()).toLocalDate().toString(),
+                    it.invoiceNo, Csv.safe(it.branchName), Instant.ofEpochMilli(it.createdAt).atZone(ZoneId.systemDefault()).toLocalDate().toString(),
                     Csv.safe(it.customerName.orEmpty()), it.paymentMode, it.status,
                     Parsing.paiseToPlain(it.subtotalPaise), Parsing.paiseToPlain(it.taxPaise), Parsing.paiseToPlain(it.discountPaise),
                     Parsing.paiseToPlain(it.roundOffPaise), Parsing.paiseToPlain(it.totalPaise), Parsing.paiseToPlain(it.returnedPaise),

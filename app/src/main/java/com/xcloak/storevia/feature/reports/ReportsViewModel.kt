@@ -22,6 +22,7 @@ data class ReportFilters(
     val customerId: String? = null,
     val taxRateBp: Int? = null,
     val supplierId: String? = null,
+    val branchId: String? = null,
 )
 data class ReportFilterOptions(
     val products: List<ReportFilterOption> = emptyList(),
@@ -29,6 +30,7 @@ data class ReportFilterOptions(
     val customers: List<ReportFilterOption> = emptyList(),
     val taxRatesBp: List<Int> = emptyList(),
     val suppliers: List<ReportFilterOption> = emptyList(),
+    val branches: List<ReportFilterOption> = emptyList(),
 )
 
 private data class ReportQuery(
@@ -106,6 +108,7 @@ class ReportsViewModel @Inject constructor(
     supplierDao: SupplierDao,
     productDao: ProductDao,
     categoryDao: CategoryDao,
+    branchDao: BranchDao,
     prefs: AppPrefs,
 ) : ViewModel() {
 
@@ -132,6 +135,7 @@ class ReportsViewModel @Inject constructor(
     fun setCustomerFilter(id: String?) = filters.update { it.copy(customerId = id) }
     fun setTaxRateFilter(rateBp: Int?) = filters.update { it.copy(taxRateBp = rateBp) }
     fun setSupplierFilter(id: String?) = filters.update { it.copy(supplierId = id) }
+    fun setBranchFilter(id: String?) = filters.update { it.copy(branchId = id) }
 
     fun setCustomRange(start: LocalDate, endInclusive: LocalDate): Boolean {
         if (endInclusive.isBefore(start)) return false
@@ -151,10 +155,10 @@ class ReportsViewModel @Inject constructor(
 
     private val salesFlow: Flow<SalesReport> = query.flatMapLatest { q ->
         combine(
-            reports.sales(q.from, q.to, q.method?.name, q.filters.productId, q.filters.categoryId, q.filters.customerId, q.filters.taxRateBp, q.filters.supplierId),
-            reports.lines(q.from, q.to, q.method?.name, q.filters.productId, q.filters.categoryId, q.filters.customerId, q.filters.taxRateBp, q.filters.supplierId),
-            reports.returnsTotal(q.from, q.to, q.method?.name, q.filters.productId, q.filters.categoryId, q.filters.customerId, q.filters.taxRateBp, q.filters.supplierId),
-            reports.returnLines(q.from, q.to, q.method?.name, q.filters.productId, q.filters.categoryId, q.filters.customerId, q.filters.taxRateBp, q.filters.supplierId),
+            reports.sales(q.from, q.to, q.method?.name, q.filters.productId, q.filters.categoryId, q.filters.customerId, q.filters.taxRateBp, q.filters.supplierId, q.filters.branchId),
+            reports.lines(q.from, q.to, q.method?.name, q.filters.productId, q.filters.categoryId, q.filters.customerId, q.filters.taxRateBp, q.filters.supplierId, q.filters.branchId),
+            reports.returnsTotal(q.from, q.to, q.method?.name, q.filters.productId, q.filters.categoryId, q.filters.customerId, q.filters.taxRateBp, q.filters.supplierId, q.filters.branchId),
+            reports.returnLines(q.from, q.to, q.method?.name, q.filters.productId, q.filters.categoryId, q.filters.customerId, q.filters.taxRateBp, q.filters.supplierId, q.filters.branchId),
         ) { sales, lines, returns, retLines ->
             SalesReport(
                 bills = sales.bills, grossPaise = sales.grossPaise, returnsPaise = returns, discountPaise = sales.discountPaise,
@@ -165,16 +169,18 @@ class ReportsViewModel @Inject constructor(
         }
     }
 
-    private val stockFlow: Flow<StockReport> = prefs.settings
-        .map { it.expiryWarnDays.coerceAtLeast(1) }
+    private val stockFlow: Flow<StockReport> = combine(
+        prefs.settings.map { it.expiryWarnDays.coerceAtLeast(1) }.distinctUntilChanged(),
+        filters.map { it.branchId }.distinctUntilChanged(),
+    ) { expiryDays, branchId -> expiryDays to branchId }
         .distinctUntilChanged()
-        .flatMapLatest { expiryDays ->
+        .flatMapLatest { (expiryDays, branchId) ->
             val today = LocalDate.now()
             val base = combine(
-                reports.stockValue(),
-                reports.expiryBetween(today, today.plusDays(expiryDays.toLong())),
-                reports.expiryBetween(LocalDate.of(1970, 1, 1), today.minusDays(1)),
-                batchDao.observeLowStock(),
+                reports.stockValue(branchId),
+                reports.expiryBetween(today, today.plusDays(expiryDays.toLong()), branchId),
+                reports.expiryBetween(LocalDate.of(1970, 1, 1), today.minusDays(1), branchId),
+                batchDao.observeLowStock(branchId),
                 customerDao.observeTotalDue(),
             ) { value, expiring, expired, low, khata ->
                 StockReport(value.costPaise, value.retailPaise, expiring, expired, low, khata)
@@ -184,16 +190,16 @@ class ReportsViewModel @Inject constructor(
 
     private val paymentsFlow = query.flatMapLatest { q ->
         reports.paymentsByMethod(
-            q.from, q.to, q.method?.name, q.filters.productId, q.filters.categoryId, q.filters.customerId, q.filters.taxRateBp, q.filters.supplierId,
+            q.from, q.to, q.method?.name, q.filters.productId, q.filters.categoryId, q.filters.customerId, q.filters.taxRateBp, q.filters.supplierId, q.filters.branchId,
         )
     }
     private val topProductsFlow = query.flatMapLatest { q ->
         reports.topProducts(
-            q.from, q.to, 5, q.method?.name, q.filters.productId, q.filters.categoryId, q.filters.customerId, q.filters.taxRateBp, q.filters.supplierId,
+            q.from, q.to, 5, q.method?.name, q.filters.productId, q.filters.categoryId, q.filters.customerId, q.filters.taxRateBp, q.filters.supplierId, q.filters.branchId,
         )
     }
     private val purchaseSpendFlow = query.flatMapLatest { q ->
-        reports.purchaseSpend(q.from, q.to, q.filters.supplierId)
+        reports.purchaseSpend(q.from, q.to, q.filters.supplierId, q.filters.branchId)
     }
     private val selectedFilters = combine(period, paymentMethod, filters) { p, method, selected ->
         SelectedReportFilters(p, method, selected)
@@ -203,13 +209,15 @@ class ReportsViewModel @Inject constructor(
         categoryDao.observeAll(),
         customerDao.observeAll(),
         supplierDao.observeAll(),
-    ) { products, categories, customers, suppliers ->
+        branchDao.observeAll(),
+    ) { products, categories, customers, suppliers, branches ->
         ReportFilterOptions(
             products = products.map { it.filterOption() },
             categories = categories.map { ReportFilterOption(it.id, it.name) },
             customers = customers.map { ReportFilterOption(it.id, it.name) },
             taxRatesBp = products.map { it.gstRateBp }.distinct().sorted(),
             suppliers = suppliers.map { ReportFilterOption(it.id, it.name) },
+            branches = branches.map { ReportFilterOption(it.id, it.name) },
         )
     }
 

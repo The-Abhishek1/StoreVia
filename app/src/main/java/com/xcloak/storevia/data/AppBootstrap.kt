@@ -26,7 +26,7 @@ class AppBootstrap @Inject constructor(
         if (storeDao.get() == null) storeDao.upsert(StoreEntity(name = "My Store"))
         val store = checkNotNull(storeDao.get())
         if (branchDao.count() == 0) {
-            branchDao.insert(BranchEntity(id = "default", name = store.name, selectedOnDevice = true))
+            branchDao.insert(BranchEntity(id = store.id, name = store.name, selectedOnDevice = true))
         } else if (branchDao.selectedId() == null) {
             branchDao.firstId()?.let { branchDao.selectOnDevice(it, System.currentTimeMillis()) }
         }

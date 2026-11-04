@@ -32,6 +32,8 @@ interface BranchDao {
     suspend fun firstId(): String?
     @Query("SELECT * FROM branches WHERE id = :id AND deletedAt IS NULL")
     suspend fun getById(id: String): BranchEntity?
+    @Query("SELECT * FROM branches WHERE deletedAt IS NULL AND name = :name COLLATE NOCASE LIMIT 1")
+    suspend fun findByName(name: String): BranchEntity?
     @Query("SELECT COUNT(*) > 0 FROM branches WHERE deletedAt IS NULL AND name = :name COLLATE NOCASE AND id != :exceptId")
     suspend fun nameExists(name: String, exceptId: String): Boolean
     @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun insert(branch: BranchEntity)
@@ -93,7 +95,7 @@ interface ProductDao {
                 AND (:q = '' OR p.name LIKE '%' || :q || '%' OR p.sku LIKE '%' || :q || '%'
                      OR EXISTS (SELECT 1 FROM product_barcodes bc WHERE bc.productId = p.id AND bc.deletedAt IS NULL AND bc.barcode = :q))
               ORDER BY p.name COLLATE NOCASE""")
-    fun listWithStock(q: String, branchId: String): Flow<List<ProductListRow>>
+    fun listWithStock(q: String, branchId: String = "default"): Flow<List<ProductListRow>>
 
     @Query("""SELECT p.id AS id, p.name AS name, p.variantLabel AS variantLabel, p.sellPricePaise AS sellPricePaise, u.symbol AS unitSymbol,
                      COALESCE((SELECT SUM(b.qtyOnHandMilli) FROM batches b
@@ -106,7 +108,7 @@ interface ProductDao {
                 AND (:q = '' OR p.name LIKE '%' || :q || '%' OR p.sku LIKE '%' || :q || '%'
                      OR EXISTS (SELECT 1 FROM product_barcodes bc WHERE bc.productId = p.id AND bc.deletedAt IS NULL AND bc.barcode = :q))
               ORDER BY p.name COLLATE NOCASE""")
-    fun listWithStockByCategory(q: String, categoryId: String, branchId: String): Flow<List<ProductListRow>>
+    fun listWithStockByCategory(q: String, categoryId: String, branchId: String = "default"): Flow<List<ProductListRow>>
 
     @Insert(onConflict = OnConflictStrategy.ABORT) suspend fun insert(p: ProductEntity)
     @Update suspend fun update(p: ProductEntity)
@@ -127,7 +129,7 @@ interface ProductDao {
               WHERE p.parentProductId = :parentId AND p.deletedAt IS NULL AND p.isActive = 1
               GROUP BY p.id
               ORDER BY p.variantLabel""")
-    fun observeVariants(parentId: String, branchId: String): Flow<List<ProductVariantRow>>
+    fun observeVariants(parentId: String, branchId: String = "default"): Flow<List<ProductVariantRow>>
     @Query("SELECT COUNT(*) > 0 FROM products WHERE parentProductId = :parentId AND deletedAt IS NULL AND isActive = 1")
     suspend fun hasVariants(parentId: String): Boolean
     @Query("SELECT * FROM products WHERE deletedAt IS NULL AND sku = :sku LIMIT 1") suspend fun findBySku(sku: String): ProductEntity?
@@ -216,10 +218,11 @@ interface SerialNumberDao {
               ORDER BY serialNumber""")
     fun observeForSale(saleId: String): Flow<List<SerialNumberEntity>>
 
-    @Query("""SELECT * FROM serial_numbers
-              WHERE productId = :productId AND deletedAt IS NULL
-              ORDER BY status, serialNumber LIMIT 100""")
-    fun observeForProduct(productId: String): Flow<List<SerialNumberEntity>>
+    @Query("""SELECT sn.* FROM serial_numbers sn
+              JOIN batches b ON b.id = sn.batchId
+              WHERE sn.productId = :productId AND b.branchId = :branchId AND sn.deletedAt IS NULL
+              ORDER BY sn.status, sn.serialNumber LIMIT 100""")
+    fun observeForProduct(productId: String, branchId: String = "default"): Flow<List<SerialNumberEntity>>
 
     @Query("SELECT COUNT(*) > 0 FROM serial_numbers WHERE serialNumber = :serialNumber")
     suspend fun exists(serialNumber: String): Boolean
@@ -249,31 +252,32 @@ data class LowStockRow(val productId: String, val name: String, val onHandMilli:
 @Dao
 interface BatchDao {
     @Insert suspend fun insert(b: BatchEntity)
-    @Query("SELECT * FROM batches WHERE id = :id AND branchId = :branchId AND deletedAt IS NULL") suspend fun getById(id: String, branchId: String): BatchEntity?
+    @Query("SELECT * FROM batches WHERE id = :id AND branchId = :branchId AND deletedAt IS NULL")
+    suspend fun getById(id: String, branchId: String = "default"): BatchEntity?
 
     @Query("""SELECT * FROM batches WHERE productId = :productId AND branchId = :branchId AND deletedAt IS NULL AND qtyOnHandMilli > 0
               ORDER BY (expiryDate IS NULL), expiryDate ASC, receivedAt ASC""")
-    fun observeForProduct(productId: String, branchId: String): Flow<List<BatchEntity>>
+    fun observeForProduct(productId: String, branchId: String = "default"): Flow<List<BatchEntity>>
 
     /** FEFO: earliest expiry first, batches without expiry last. Expired batches excluded. */
     @Query("""SELECT * FROM batches
               WHERE productId = :productId AND branchId = :branchId AND deletedAt IS NULL AND qtyOnHandMilli > 0
                 AND (expiryDate IS NULL OR expiryDate >= :today)
               ORDER BY (expiryDate IS NULL), expiryDate ASC, receivedAt ASC""")
-    suspend fun fefoBatches(productId: String, today: LocalDate, branchId: String): List<BatchEntity>
+    suspend fun fefoBatches(productId: String, today: LocalDate, branchId: String = "default"): List<BatchEntity>
 
     // Not marked dirty on purpose: the on-hand quantity is a cache of the stock ledger and is never synced as such.
     @Query("UPDATE batches SET qtyOnHandMilli = qtyOnHandMilli + :deltaMilli, updatedAt = :now WHERE id = :id")
     suspend fun adjustQty(id: String, deltaMilli: Long, now: Long = System.currentTimeMillis())
 
     @Query("""SELECT COUNT(*) FROM batches
-              WHERE branchId = :branchId AND deletedAt IS NULL AND qtyOnHandMilli > 0 AND expiryDate IS NOT NULL
+              WHERE (:branchId IS NULL OR branchId = :branchId) AND deletedAt IS NULL AND qtyOnHandMilli > 0 AND expiryDate IS NOT NULL
                 AND expiryDate BETWEEN :from AND :to""")
-    fun observeExpiringCount(from: LocalDate, to: LocalDate, branchId: String): Flow<Int>
+    fun observeExpiringCount(from: LocalDate, to: LocalDate, branchId: String? = "default"): Flow<Int>
 
     @Query("""SELECT p.id AS productId, p.name AS name,
                      COALESCE(SUM(b.qtyOnHandMilli), 0) AS onHandMilli, p.minStockMilli AS minStockMilli
-              FROM products p LEFT JOIN batches b ON b.productId = p.id AND b.branchId = :branchId AND b.deletedAt IS NULL
+              FROM products p LEFT JOIN batches b ON b.productId = p.id AND (:branchId IS NULL OR b.branchId = :branchId) AND b.deletedAt IS NULL
               WHERE p.deletedAt IS NULL AND p.isActive = 1 AND p.minStockMilli > 0
                 AND NOT EXISTS (
                     SELECT 1 FROM products child
@@ -282,15 +286,17 @@ interface BatchDao {
               GROUP BY p.id
               HAVING onHandMilli < p.minStockMilli
               ORDER BY p.name""")
-    fun observeLowStock(branchId: String): Flow<List<LowStockRow>>
+    fun observeLowStock(branchId: String? = "default"): Flow<List<LowStockRow>>
 }
 
 @Dao
 interface StockMovementDao {
     @Insert suspend fun insert(m: StockMovementEntity)
     @Insert suspend fun insertAll(m: List<StockMovementEntity>)
+    @Query("SELECT * FROM stock_movements WHERE productId = :productId ORDER BY createdAt DESC LIMIT :limit")
+    fun observeForProduct(productId: String, limit: Int = 200): Flow<List<StockMovementEntity>>
     @Query("SELECT * FROM stock_movements WHERE productId = :productId AND branchId = :branchId ORDER BY createdAt DESC LIMIT :limit")
-    fun observeForProduct(productId: String, branchId: String, limit: Int = 200): Flow<List<StockMovementEntity>>
+    fun observeForProductAtBranch(productId: String, branchId: String, limit: Int = 200): Flow<List<StockMovementEntity>>
     @Query("SELECT COUNT(*) FROM stock_movements WHERE productId = :productId")
     fun observeMovementCount(productId: String): Flow<Int>
     @Query("SELECT * FROM stock_movements WHERE refType = 'RECIPE_SALE' AND refId = :saleId")
@@ -300,7 +306,7 @@ interface StockMovementDao {
 
     /** Consistency check: ledger total for a product. Must equal SUM(batch balances) + batchless negatives. */
     @Query("SELECT COALESCE(SUM(qtyMilli),0) FROM stock_movements WHERE productId = :productId AND branchId = :branchId")
-    suspend fun ledgerTotal(productId: String, branchId: String): Long
+    suspend fun ledgerTotal(productId: String, branchId: String = "default"): Long
 }
 
 data class CustomerBalanceRow(val id: String, val name: String, val phone: String?, val balancePaise: Long)
@@ -379,11 +385,12 @@ interface SaleDao {
     @Query("SELECT * FROM sale_lines WHERE saleId = :saleId ORDER BY rowid") fun observeLines(saleId: String): Flow<List<SaleLineEntity>>
     @Query("SELECT * FROM payments WHERE saleId = :saleId ORDER BY createdAt") fun observePayments(saleId: String): Flow<List<PaymentEntity>>
 
-    @Query("SELECT * FROM sales ORDER BY createdAt DESC LIMIT :limit") fun observeRecent(limit: Int = 100): Flow<List<SaleEntity>>
+    @Query("SELECT * FROM sales WHERE branchId = :branchId ORDER BY createdAt DESC LIMIT :limit")
+    fun observeRecent(limit: Int = 100, branchId: String = "default"): Flow<List<SaleEntity>>
 
     @Query("""SELECT COALESCE(SUM(totalPaise),0) AS totalPaise, COUNT(*) AS count FROM sales
-              WHERE status != 'CANCELLED' AND createdAt >= :fromMillis AND createdAt < :toMillis""")
-    fun observeSummary(fromMillis: Long, toMillis: Long): Flow<DaySummary>
+              WHERE status != 'CANCELLED' AND branchId = :branchId AND createdAt >= :fromMillis AND createdAt < :toMillis""")
+    fun observeSummary(fromMillis: Long, toMillis: Long, branchId: String = "default"): Flow<DaySummary>
 }
 
 @Dao

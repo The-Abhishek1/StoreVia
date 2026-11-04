@@ -4,6 +4,7 @@ import androidx.room.withTransaction
 import com.xcloak.storevia.core.access.*
 import com.xcloak.storevia.core.database.StorviaDatabase
 import com.xcloak.storevia.core.database.dao.*
+import com.xcloak.storevia.core.database.dao.activeBranchId
 import com.xcloak.storevia.core.database.entity.*
 import com.xcloak.storevia.core.money.Money
 import java.time.LocalDate
@@ -49,6 +50,9 @@ class SalesImportUseCase @Inject constructor(
             }
         }
         document.summaries.forEach { summary ->
+            if (summary.branchName != null && db.branchDao().findByName(summary.branchName) == null) {
+                errors += SalesImportRowError(summary.line, "Branch '${summary.branchName}' was not found. Add it in store settings before importing.")
+            }
             if (saleDao.hasInvoiceNo(summary.billId)) {
                 errors += SalesImportRowError(summary.line, "Bill ID '${summary.billId}' already exists.")
             }
@@ -57,6 +61,15 @@ class SalesImportUseCase @Inject constructor(
             }
             if (summary.isCredit && summary.customerName == null) {
                 errors += SalesImportRowError(summary.line, "Credit sales require a customer.")
+            }
+            val payments = document.payments.filter { it.billId == summary.billId }
+            val paid = if (payments.isNotEmpty()) payments.sumOf { it.amountPaise }
+                else if (summary.isCredit) 0L else summary.totalPaise
+            if (paid > summary.totalPaise) {
+                errors += SalesImportRowError(summary.line, "Payment allocations exceed the bill total.")
+            }
+            if (summary.totalPaise > paid && summary.customerName == null) {
+                errors += SalesImportRowError(summary.line, "Unpaid sales require a customer.")
             }
             if (summary.totalPaise < 0 || summary.discountPaise < 0 || summary.taxPaise < 0 ||
                 summary.taxPaise > summary.totalPaise
@@ -77,9 +90,11 @@ class SalesImportUseCase @Inject constructor(
             val validation = validate(document)
             if (!validation.valid) throw SalesImportValidationException(validation.errors)
 
+            val activeBranchId = db.branchDao().activeBranchId()
             val linesByBill = document.lines.groupBy { it.billId }
             val zone = ZoneId.systemDefault()
             for (summary in document.summaries) {
+                val branchId = summary.branchName?.let { db.branchDao().findByName(it)?.id } ?: activeBranchId
                 val customer = summary.customerName?.let { customerDao.findByName(it) }
                 val createdAt = summary.date.atStartOfDay(zone).toInstant().toEpochMilli()
                 val totalNet = summary.totalPaise - summary.taxPaise
@@ -108,7 +123,7 @@ class SalesImportUseCase @Inject constructor(
                             )
                         }
                         var remaining = line.qtyMilli
-                        val batches = batchDao.fefoBatches(line.product.id, summary.date)
+                        val batches = batchDao.fefoBatches(line.product.id, summary.date, branchId)
                         for (batch in batches) {
                             if (remaining == 0L) break
                             val take = minOf(remaining, batch.qtyOnHandMilli)
@@ -169,11 +184,14 @@ class SalesImportUseCase @Inject constructor(
                         costSnapshotPaise = costSnapshot,
                     )
                 }
-                val paid = if (summary.isCredit) 0L else summary.totalPaise
+                val paymentsForBill = document.payments.filter { it.billId == summary.billId }
+                val paid = if (paymentsForBill.isNotEmpty()) paymentsForBill.sumOf { it.amountPaise }
+                    else if (summary.isCredit) 0L else summary.totalPaise
                 saleDao.insertSale(
                     SaleEntity(
                         id = saleId,
                         invoiceNo = summary.billId,
+                        branchId = branchId,
                         customerId = customer?.id,
                         interState = false,
                         subtotalPaise = totalNet,
@@ -186,7 +204,20 @@ class SalesImportUseCase @Inject constructor(
                     ),
                 )
                 saleDao.insertLines(saleLines)
-                if (summary.paymentMethod != null) {
+                if (paymentsForBill.isNotEmpty()) {
+                    saleDao.insertPayments(
+                        paymentsForBill.map { payment ->
+                            PaymentEntity(
+                                saleId = saleId,
+                                customerId = customer?.id,
+                                method = payment.method,
+                                amountPaise = payment.amountPaise,
+                                reference = payment.reference,
+                                createdAt = createdAt,
+                            )
+                        },
+                    )
+                } else if (summary.paymentMethod != null) {
                     saleDao.insertPayments(
                         listOf(
                             PaymentEntity(
@@ -199,12 +230,12 @@ class SalesImportUseCase @Inject constructor(
                         ),
                     )
                 }
-                if (summary.isCredit && customer != null) {
+                if (summary.totalPaise > paid && customer != null) {
                     customerDao.insertLedger(
                         CustomerLedgerEntity(
                             customerId = customer.id,
                             type = LedgerType.SALE_ON_CREDIT,
-                            amountPaise = summary.totalPaise,
+                            amountPaise = summary.totalPaise - paid,
                             refType = "SALE",
                             refId = saleId,
                             createdAt = createdAt,
@@ -223,7 +254,7 @@ class SalesImportUseCase @Inject constructor(
                                         listOf(SalesImportRowError(piece.line.row.line, "A recipe ingredient is unavailable.")),
                                     )
                                 var remaining = scaleMilli(component.quantityPerUnitMilli, piece.qtyMilli)
-                                val batches = batchDao.fefoBatches(ingredient.id, summary.date)
+                                val batches = batchDao.fefoBatches(ingredient.id, summary.date, branchId)
                                 for (batch in batches) {
                                     if (remaining == 0L) break
                                     val take = minOf(remaining, batch.qtyOnHandMilli)
@@ -231,6 +262,7 @@ class SalesImportUseCase @Inject constructor(
                                         batchDao.adjustQty(batch.id, -take, now)
                                         movements += StockMovementEntity(
                                             productId = ingredient.id,
+                                            branchId = branchId,
                                             batchId = batch.id,
                                             type = MovementType.SALE,
                                             qtyMilli = -take,
@@ -271,6 +303,7 @@ class SalesImportUseCase @Inject constructor(
                             }
                             movements += StockMovementEntity(
                                 productId = piece.line.product.id,
+                                branchId = branchId,
                                 batchId = piece.batch?.id,
                                 type = MovementType.SALE,
                                 qtyMilli = -piece.qtyMilli,

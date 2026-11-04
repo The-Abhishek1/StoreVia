@@ -11,12 +11,12 @@ data class ProductExportRow(
 )
 
 data class BatchExportRow(
-    val productName: String, val unitSymbol: String, val batchNo: String?, val expiryDate: LocalDate?,
+    val branchName: String, val productName: String, val unitSymbol: String, val batchNo: String?, val expiryDate: LocalDate?,
     val qtyOnHandMilli: Long, val costPaise: Long,
 )
 
 data class SaleExportRow(
-    val invoiceNo: String, val createdAt: Long, val customerName: String?, val status: String,
+    val invoiceNo: String, val branchName: String, val createdAt: Long, val customerName: String?, val status: String,
     val subtotalPaise: Long, val taxPaise: Long, val discountPaise: Long, val roundOffPaise: Long,
     val totalPaise: Long, val returnedPaise: Long, val paidPaise: Long, val paymentMode: String,
 )
@@ -26,6 +26,12 @@ data class SaleLineExportRow(
     val productName: String,
     val qtyMilli: Long,
     val unitPricePaise: Long,
+)
+data class SalePaymentExportRow(
+    val invoiceNo: String,
+    val method: String,
+    val amountPaise: Long,
+    val reference: String?,
 )
 
 @Dao
@@ -40,21 +46,24 @@ interface ExportDao {
               WHERE p.deletedAt IS NULL ORDER BY p.name COLLATE NOCASE""")
     suspend fun products(): List<ProductExportRow>
 
-    @Query("""SELECT p.name AS productName, u.symbol AS unitSymbol, b.batchNo AS batchNo, b.expiryDate AS expiryDate,
+    @Query("""SELECT br.name AS branchName, p.name AS productName, u.symbol AS unitSymbol, b.batchNo AS batchNo, b.expiryDate AS expiryDate,
                      b.qtyOnHandMilli AS qtyOnHandMilli, b.costPaise AS costPaise
               FROM batches b JOIN products p ON p.id = b.productId JOIN units u ON u.id = p.unitId
+              JOIN branches br ON br.id = b.branchId
               WHERE b.deletedAt IS NULL AND b.qtyOnHandMilli > 0
               ORDER BY p.name COLLATE NOCASE, (b.expiryDate IS NULL), b.expiryDate""")
     suspend fun batches(): List<BatchExportRow>
 
-    @Query("""SELECT s.invoiceNo AS invoiceNo, s.createdAt AS createdAt, c.name AS customerName, s.status AS status,
+    @Query("""SELECT s.invoiceNo AS invoiceNo, br.name AS branchName, s.createdAt AS createdAt, c.name AS customerName, s.status AS status,
                      s.subtotalPaise AS subtotalPaise, s.taxPaise AS taxPaise, s.discountPaise AS discountPaise,
                      s.roundOffPaise AS roundOffPaise, s.totalPaise AS totalPaise, s.returnedPaise AS returnedPaise,
                      s.paidPaise AS paidPaise,
                      CASE WHEN s.totalPaise - s.returnedPaise > s.paidPaise THEN 'CREDIT'
+                          WHEN (SELECT COUNT(DISTINCT p.method) FROM payments p WHERE p.saleId = s.id AND p.amountPaise > 0) > 1 THEN 'SPLIT'
                           ELSE COALESCE((SELECT MIN(p.method) FROM payments p WHERE p.saleId = s.id AND p.amountPaise > 0), 'OTHER')
                      END AS paymentMode
-              FROM sales s LEFT JOIN customers c ON c.id = s.customerId ORDER BY s.createdAt""")
+              FROM sales s JOIN branches br ON br.id = s.branchId
+              LEFT JOIN customers c ON c.id = s.customerId ORDER BY s.createdAt""")
     suspend fun sales(): List<SaleExportRow>
 
     @Query("""SELECT s.invoiceNo AS invoiceNo, p.sku AS sku, sl.nameSnapshot AS productName,
@@ -63,4 +72,10 @@ interface ExportDao {
               LEFT JOIN products p ON p.id = sl.productId
               ORDER BY s.createdAt, s.invoiceNo, sl.rowid""")
     suspend fun saleLines(): List<SaleLineExportRow>
+
+    @Query("""SELECT s.invoiceNo AS invoiceNo, p.method AS method, p.amountPaise AS amountPaise, p.reference AS reference
+              FROM payments p JOIN sales s ON s.id = p.saleId
+              WHERE p.amountPaise > 0
+              ORDER BY s.createdAt, s.invoiceNo, p.createdAt, p.rowid""")
+    suspend fun salePayments(): List<SalePaymentExportRow>
 }

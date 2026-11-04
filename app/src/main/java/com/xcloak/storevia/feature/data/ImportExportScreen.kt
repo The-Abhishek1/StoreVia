@@ -32,6 +32,7 @@ fun ImportExportScreen(onBack: () -> Unit, vm: ImportExportViewModel = hiltViewM
     var pendingExport by remember { mutableStateOf<Pair<ExportKind, ExportFormat>?>(null) }
     var selectedFormat by remember { mutableStateOf(ExportFormat.CSV) }
     var pendingSalesFile by remember { mutableStateOf(false) }
+    var pendingSalesPayments by remember { mutableStateOf(false) }
     val canImport = can(Permission.IMPORT_DATA)
     val canExport = can(Permission.EXPORT_DATA)
     val proEnabled = ui.proAccessChecked && ui.proAccessEnabled
@@ -46,8 +47,14 @@ fun ImportExportScreen(onBack: () -> Unit, vm: ImportExportViewModel = hiltViewM
     val openLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) vm.readImport(uri) }
     val salesOpenLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
-            if (pendingSalesFile) vm.readSalesLines(uri) else vm.readSalesSummary(uri)
+            when {
+                pendingSalesPayments -> vm.readSalesPayments(uri)
+                pendingSalesFile -> vm.readSalesLines(uri)
+                else -> vm.readSalesSummary(uri)
+            }
         }
+        pendingSalesPayments = false
+        pendingSalesFile = false
     }
 
     val snackbar = remember { SnackbarHostState() }
@@ -105,6 +112,20 @@ fun ImportExportScreen(onBack: () -> Unit, vm: ImportExportViewModel = hiltViewM
                 ) {
                     Text(stringResource(if (ui.salesLinesSelected) R.string.sales_lines_selected else R.string.sales_choose_lines))
                 }
+                OutlinedButton(
+                    onClick = { pendingSalesPayments = true; salesOpenLauncher.launch(arrayOf("text/*", "application/vnd.ms-excel", "application/octet-stream")) },
+                    enabled = !ui.busy && canImport && proEnabled,
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(stringResource(if (ui.salesPaymentsSelected) R.string.sales_payments_selected else R.string.sales_choose_payments))
+                }
+            }
+            Button(
+                onClick = vm::prepareSalesImport,
+                enabled = !ui.busy && ui.salesSummarySelected && ui.salesLinesSelected && canImport && proEnabled,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(stringResource(R.string.sales_preview_import))
             }
 
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
@@ -123,7 +144,7 @@ fun ImportExportScreen(onBack: () -> Unit, vm: ImportExportViewModel = hiltViewM
                 listOf(
                     ExportKind.PRODUCTS to R.string.export_products, ExportKind.STOCK to R.string.export_stock,
                     ExportKind.SALES to R.string.export_sales, ExportKind.SALES_LINES to R.string.export_sales_lines,
-                    ExportKind.CUSTOMERS to R.string.export_customers,
+                    ExportKind.PAYMENTS to R.string.export_sales_payments, ExportKind.CUSTOMERS to R.string.export_customers,
                 ).forEach { (kind, label) ->
                     OutlinedButton(
                         onClick = {

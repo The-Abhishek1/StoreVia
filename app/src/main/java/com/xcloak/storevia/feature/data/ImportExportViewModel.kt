@@ -42,6 +42,7 @@ data class DataUi(
     val pendingSales: PendingSalesImport? = null,
     val salesSummarySelected: Boolean = false,
     val salesLinesSelected: Boolean = false,
+    val salesPaymentsSelected: Boolean = false,
     val proAccessChecked: Boolean = false,
     val proAccessEnabled: Boolean = false,
     val proAccessError: String? = null,
@@ -63,6 +64,7 @@ class ImportExportViewModel @Inject constructor(
     val ui: StateFlow<DataUi> = _ui.asStateFlow()
     private var salesSummaryCsv: String? = null
     private var salesLinesCsv: String? = null
+    private var salesPaymentsCsv: String? = null
 
     init { refreshProAccess() }
 
@@ -71,8 +73,9 @@ class ImportExportViewModel @Inject constructor(
     fun cancelSalesImport() {
         salesSummaryCsv = null
         salesLinesCsv = null
+        salesPaymentsCsv = null
         _ui.update {
-            it.copy(pendingSales = null, salesSummarySelected = false, salesLinesSelected = false)
+            it.copy(pendingSales = null, salesSummarySelected = false, salesLinesSelected = false, salesPaymentsSelected = false)
         }
     }
     fun setPolicy(p: DuplicatePolicy) = _ui.update { s -> s.copy(pending = s.pending?.copy(policy = p)) }
@@ -114,6 +117,7 @@ class ImportExportViewModel @Inject constructor(
 
     fun readSalesSummary(uri: Uri) = readSalesCsv(uri, summary = true)
     fun readSalesLines(uri: Uri) = readSalesCsv(uri, summary = false)
+    fun readSalesPayments(uri: Uri) = readSalesPaymentsCsv(uri)
 
     private fun readSalesCsv(uri: Uri, summary: Boolean) = viewModelScope.launch {
         if (!access.actor().can(Permission.IMPORT_DATA)) {
@@ -138,17 +142,46 @@ class ImportExportViewModel @Inject constructor(
                 busy = false,
                 salesSummarySelected = salesSummaryCsv != null,
                 salesLinesSelected = salesLinesCsv != null,
+                salesPaymentsSelected = salesPaymentsCsv != null,
             )
         }
-        val summaryCsv = salesSummaryCsv
-        val linesCsv = salesLinesCsv
-        if (summaryCsv != null && linesCsv != null) {
-            val document = SalesImportParser.parse(summaryCsv, linesCsv)
-            val validation = salesImporter.validate(document)
-            _ui.update { it.copy(pendingSales = PendingSalesImport(document, validation)) }
-            salesSummaryCsv = null
-            salesLinesCsv = null
+    }
+
+    fun prepareSalesImport() = viewModelScope.launch {
+        val summaryCsv = salesSummaryCsv ?: return@launch
+        val linesCsv = salesLinesCsv ?: return@launch
+        if (!access.actor().can(Permission.IMPORT_DATA)) {
+            _ui.update { it.copy(message = R.string.err_permission_denied) }
+            return@launch
         }
+        if (!checkProAccess()) return@launch
+        _ui.update { it.copy(busy = true) }
+        val document = SalesImportParser.parse(summaryCsv, linesCsv, salesPaymentsCsv)
+        val validation = salesImporter.validate(document)
+        _ui.update { it.copy(busy = false, pendingSales = PendingSalesImport(document, validation)) }
+        salesSummaryCsv = null
+        salesLinesCsv = null
+        salesPaymentsCsv = null
+    }
+
+    private fun readSalesPaymentsCsv(uri: Uri) = viewModelScope.launch {
+        if (!access.actor().can(Permission.IMPORT_DATA)) {
+            _ui.update { it.copy(message = R.string.err_permission_denied) }
+            return@launch
+        }
+        if (!checkProAccess()) return@launch
+        _ui.update { it.copy(busy = true) }
+        val bytes = try {
+            withContext(Dispatchers.IO) { context.contentResolver.openInputStream(uri)?.use { readCapped(it) } }
+        } catch (_: Exception) {
+            null
+        }
+        if (bytes == null) {
+            _ui.update { it.copy(busy = false, message = R.string.import_too_big) }
+            return@launch
+        }
+        salesPaymentsCsv = bytes.toString(Charsets.UTF_8)
+        _ui.update { it.copy(busy = false, salesPaymentsSelected = true) }
     }
 
     fun confirmSalesImport() {
@@ -172,6 +205,7 @@ class ImportExportViewModel @Inject constructor(
                         pendingSales = null,
                         salesSummarySelected = false,
                         salesLinesSelected = false,
+                        salesPaymentsSelected = false,
                         message = R.string.sales_import_result,
                         messageArgs = listOf(result.imported),
                     )

@@ -28,6 +28,7 @@ fun CustomersScreen(onBack: () -> Unit, onOpen: (String) -> Unit, vm: CustomersV
     val query by vm.query.collectAsStateWithLifecycle()
     val totalDue by vm.totalDue.collectAsStateWithLifecycle()
     var adding by remember { mutableStateOf(false) }
+    var owingOnly by remember { mutableStateOf(false) }
 
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
@@ -53,18 +54,31 @@ fun CustomersScreen(onBack: () -> Unit, onOpen: (String) -> Unit, vm: CustomersV
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
             )
             val list = rows
+            FilterChip(
+                selected = owingOnly,
+                onClick = { owingOnly = !owingOnly },
+                label = { Text(stringResource(R.string.customers_owing_filter)) },
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+            )
+            val filtered = list?.filter { !owingOnly || it.balancePaise > 0 }
             when {
                 list == null -> LoadingState(Modifier.weight(1f).fillMaxWidth())
-                list.isEmpty() -> Column(
-                    Modifier.fillMaxSize().padding(32.dp),
+                filtered.isNullOrEmpty() -> Column(
+                    Modifier.weight(1f).fillMaxWidth().padding(32.dp),
                     verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    Text(stringResource(R.string.customers_empty), style = MaterialTheme.typography.titleMedium)
-                    Spacer(Modifier.height(8.dp))
-                    Text(stringResource(R.string.customers_empty_hint), style = MaterialTheme.typography.bodyMedium)
+                    val noCustomersYet = list.isEmpty() && query.isBlank() && !owingOnly
+                    Text(
+                        stringResource(if (noCustomersYet) R.string.customers_empty else R.string.customers_no_matches),
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                    if (noCustomersYet) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(stringResource(R.string.customers_empty_hint), style = MaterialTheme.typography.bodyMedium)
+                    }
                 }
-                else -> LazyColumn(contentPadding = PaddingValues(bottom = 96.dp)) {
-                    items(list, key = { it.id }) { r ->
+                else -> LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 96.dp)) {
+                    items(filtered, key = { it.id }) { r ->
                         ListItem(
                             modifier = Modifier.clickable { onOpen(r.id) },
                             headlineContent = { Text(r.name, style = MaterialTheme.typography.titleMedium) },

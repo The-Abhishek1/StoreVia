@@ -51,6 +51,7 @@ interface ReportDao {
                                                    WHERE pl.productId = sl.productId AND pu.supplierId = :supplierId))), 0)
                        END), 0) AS discountPaise
               FROM sales s WHERE s.status != 'CANCELLED' AND s.createdAt >= :from AND s.createdAt < :to
+                AND (:branchId IS NULL OR s.branchId = :branchId)
                 AND (:customerId IS NULL OR s.customerId = :customerId)
                 AND ((:productId IS NULL AND :categoryId IS NULL AND :taxRateBp IS NULL AND :supplierId IS NULL) OR EXISTS
                      (SELECT 1 FROM sale_lines sl JOIN products fp ON fp.id = sl.productId
@@ -65,7 +66,7 @@ interface ReportDao {
                 AND (:method IS NULL OR EXISTS (SELECT 1 FROM payments p WHERE p.saleId = s.id AND p.method = :method))""")
     fun sales(
         from: Long, to: Long, method: String? = null, productId: String? = null, categoryId: String? = null,
-        customerId: String? = null, taxRateBp: Int? = null, supplierId: String? = null,
+        customerId: String? = null, taxRateBp: Int? = null, supplierId: String? = null, branchId: String? = null,
     ): Flow<SalesAgg>
 
     @Query("""SELECT COALESCE(SUM(sl.taxableValuePaise), 0) AS taxablePaise,
@@ -74,6 +75,7 @@ interface ReportDao {
               FROM sale_lines sl JOIN sales s ON s.id = sl.saleId
               JOIN products p ON p.id = sl.productId
               WHERE s.status != 'CANCELLED' AND s.createdAt >= :from AND s.createdAt < :to
+                AND (:branchId IS NULL OR s.branchId = :branchId)
                 AND (:productId IS NULL OR sl.productId = :productId)
                 AND (:categoryId IS NULL OR p.categoryId = :categoryId)
                 AND (:customerId IS NULL OR s.customerId = :customerId)
@@ -84,7 +86,7 @@ interface ReportDao {
                 AND (:method IS NULL OR EXISTS (SELECT 1 FROM payments p WHERE p.saleId = s.id AND p.method = :method))""")
     fun lines(
         from: Long, to: Long, method: String? = null, productId: String? = null, categoryId: String? = null,
-        customerId: String? = null, taxRateBp: Int? = null, supplierId: String? = null,
+        customerId: String? = null, taxRateBp: Int? = null, supplierId: String? = null, branchId: String? = null,
     ): Flow<LineAgg>
 
     @Query("""SELECT COALESCE(SUM(
@@ -102,6 +104,7 @@ interface ReportDao {
                        END), 0)
               FROM sale_returns r JOIN sales s ON s.id = r.saleId
               WHERE s.status != 'CANCELLED' AND r.createdAt >= :from AND r.createdAt < :to
+                AND (:branchId IS NULL OR s.branchId = :branchId)
                 AND (:customerId IS NULL OR s.customerId = :customerId)
                 AND ((:productId IS NULL AND :categoryId IS NULL AND :taxRateBp IS NULL AND :supplierId IS NULL) OR EXISTS
                      (SELECT 1 FROM sale_return_lines rl
@@ -116,7 +119,7 @@ interface ReportDao {
                 AND (:method IS NULL OR EXISTS (SELECT 1 FROM payments p WHERE p.saleId = s.id AND p.method = :method))""")
     fun returnsTotal(
         from: Long, to: Long, method: String? = null, productId: String? = null, categoryId: String? = null,
-        customerId: String? = null, taxRateBp: Int? = null, supplierId: String? = null,
+        customerId: String? = null, taxRateBp: Int? = null, supplierId: String? = null, branchId: String? = null,
     ): Flow<Long>
 
     @Query("""SELECT COALESCE(SUM(rl.amountPaise * sl.taxableValuePaise / sl.lineTotalPaise), 0) AS taxablePaise,
@@ -127,6 +130,7 @@ interface ReportDao {
               JOIN sales s ON s.id = r.saleId
               JOIN products p ON p.id = sl.productId
               WHERE s.status != 'CANCELLED' AND r.createdAt >= :from AND r.createdAt < :to AND sl.lineTotalPaise > 0
+                AND (:branchId IS NULL OR s.branchId = :branchId)
                 AND (:productId IS NULL OR sl.productId = :productId)
                 AND (:categoryId IS NULL OR p.categoryId = :categoryId)
                 AND (:customerId IS NULL OR s.customerId = :customerId)
@@ -137,13 +141,14 @@ interface ReportDao {
                 AND (:method IS NULL OR EXISTS (SELECT 1 FROM payments p WHERE p.saleId = s.id AND p.method = :method))""")
     fun returnLines(
         from: Long, to: Long, method: String? = null, productId: String? = null, categoryId: String? = null,
-        customerId: String? = null, taxRateBp: Int? = null, supplierId: String? = null,
+        customerId: String? = null, taxRateBp: Int? = null, supplierId: String? = null, branchId: String? = null,
     ): Flow<ReturnLineAgg>
 
     /** Money in/out by method, refunds included as negatives. */
     @Query("""SELECT p.method AS method, SUM(p.amountPaise) AS totalPaise FROM payments p
               JOIN sales s ON s.id = p.saleId
               WHERE s.status != 'CANCELLED' AND s.createdAt >= :from AND s.createdAt < :to
+                AND (:branchId IS NULL OR s.branchId = :branchId)
                 AND (:method IS NULL OR p.method = :method)
                 AND (:customerId IS NULL OR s.customerId = :customerId)
                 AND ((:productId IS NULL AND :categoryId IS NULL AND :taxRateBp IS NULL AND :supplierId IS NULL) OR EXISTS
@@ -158,7 +163,7 @@ interface ReportDao {
               GROUP BY p.method ORDER BY totalPaise DESC""")
     fun paymentsByMethod(
         from: Long, to: Long, method: String? = null, productId: String? = null, categoryId: String? = null,
-        customerId: String? = null, taxRateBp: Int? = null, supplierId: String? = null,
+        customerId: String? = null, taxRateBp: Int? = null, supplierId: String? = null, branchId: String? = null,
     ): Flow<List<PaymentTotalRow>>
 
     @Query("""SELECT sl.productId AS productId, MAX(sl.nameSnapshot) AS name, COALESCE(MAX(u.symbol), '') AS unitSymbol,
@@ -168,6 +173,7 @@ interface ReportDao {
               LEFT JOIN products p ON p.id = sl.productId
               LEFT JOIN units u ON u.id = p.unitId
               WHERE s.status != 'CANCELLED' AND s.createdAt >= :from AND s.createdAt < :to
+                AND (:branchId IS NULL OR s.branchId = :branchId)
                 AND (:productId IS NULL OR sl.productId = :productId)
                 AND (:categoryId IS NULL OR p.categoryId = :categoryId)
                 AND (:customerId IS NULL OR s.customerId = :customerId)
@@ -179,33 +185,36 @@ interface ReportDao {
               GROUP BY sl.productId ORDER BY revenuePaise DESC LIMIT :limit""")
     fun topProducts(
         from: Long, to: Long, limit: Int, method: String? = null, productId: String? = null,
-        categoryId: String? = null, customerId: String? = null, taxRateBp: Int? = null, supplierId: String? = null,
+        categoryId: String? = null, customerId: String? = null, taxRateBp: Int? = null, supplierId: String? = null, branchId: String? = null,
     ): Flow<List<TopProductRow>>
 
     @Query("""SELECT COALESCE(SUM(totalPaise), 0) FROM purchases
               WHERE purchaseDate >= :from AND purchaseDate < :to
-                AND (:supplierId IS NULL OR supplierId = :supplierId)""")
-    fun purchaseSpend(from: Long, to: Long, supplierId: String?): Flow<Long>
+                AND (:supplierId IS NULL OR supplierId = :supplierId)
+                AND (:branchId IS NULL OR branchId = :branchId)""")
+    fun purchaseSpend(from: Long, to: Long, supplierId: String?, branchId: String? = null): Flow<Long>
 
     @Query("""SELECT COALESCE(SUM(b.qtyOnHandMilli * b.costPaise / 1000), 0) AS costPaise,
                      COALESCE(SUM(b.qtyOnHandMilli * p.sellPricePaise / 1000), 0) AS retailPaise
               FROM batches b JOIN products p ON p.id = b.productId
-              WHERE b.deletedAt IS NULL AND b.qtyOnHandMilli > 0 AND p.deletedAt IS NULL""")
-    fun stockValue(): Flow<StockValue>
+              WHERE b.deletedAt IS NULL AND b.qtyOnHandMilli > 0 AND p.deletedAt IS NULL
+                AND (:branchId IS NULL OR b.branchId = :branchId)""")
+    fun stockValue(branchId: String? = null): Flow<StockValue>
 
     /** Batches with stock whose expiry date falls in [from, to] (inclusive). */
     @Query("""SELECT COUNT(*) AS batches, COALESCE(SUM(qtyOnHandMilli * costPaise / 1000), 0) AS costPaise
               FROM batches WHERE deletedAt IS NULL AND qtyOnHandMilli > 0 AND expiryDate IS NOT NULL
-                AND expiryDate BETWEEN :from AND :to""")
-    fun expiryBetween(from: LocalDate, to: LocalDate): Flow<BatchAgg>
+                AND expiryDate BETWEEN :from AND :to AND (:branchId IS NULL OR branchId = :branchId)""")
+    fun expiryBetween(from: LocalDate, to: LocalDate, branchId: String? = null): Flow<BatchAgg>
 
     /** Products below their reorder level, with what they cost to buy. */
     @Query("""SELECT p.id AS productId, p.name AS name, u.symbol AS unitSymbol, u.allowDecimal AS allowDecimal,
-                     COALESCE((SELECT SUM(b.qtyOnHandMilli) FROM batches b WHERE b.productId = p.id AND b.deletedAt IS NULL), 0) AS onHandMilli,
+                     COALESCE((SELECT SUM(b.qtyOnHandMilli) FROM batches b WHERE b.productId = p.id AND b.deletedAt IS NULL
+                               AND (:branchId IS NULL OR b.branchId = :branchId)), 0) AS onHandMilli,
                      p.minStockMilli AS minStockMilli, p.costPaise AS costPaise
               FROM products p JOIN units u ON u.id = p.unitId
               WHERE p.deletedAt IS NULL AND p.isActive = 1 AND p.minStockMilli > 0
               GROUP BY p.id HAVING onHandMilli < p.minStockMilli
               ORDER BY p.name COLLATE NOCASE""")
-    fun reorderRows(): Flow<List<ReorderRow>>
+    fun reorderRows(branchId: String? = null): Flow<List<ReorderRow>>
 }

@@ -48,8 +48,17 @@ interface PurchaseDao {
     @Query("""SELECT p.id AS id, p.invoiceNo AS invoiceNo, s.name AS supplierName, p.purchaseDate AS purchaseDate,
                      p.totalPaise AS totalPaise, p.paidPaise AS paidPaise
               FROM purchases p LEFT JOIN suppliers s ON s.id = p.supplierId
+              WHERE p.branchId = :branchId
+                AND (:query = '' OR COALESCE(p.invoiceNo, '') LIKE '%' || :query || '%'
+                     OR COALESCE(s.name, '') LIKE '%' || :query || '%')
+                AND (:unpaidOnly = 0 OR p.paidPaise < p.totalPaise)
               ORDER BY p.purchaseDate DESC, p.createdAt DESC LIMIT :limit""")
-    fun observeRecent(limit: Int = 200): Flow<List<PurchaseListRow>>
+    fun observeRecent(
+        limit: Int = 200,
+        branchId: String = "default",
+        query: String = "",
+        unpaidOnly: Boolean = false,
+    ): Flow<List<PurchaseListRow>>
 
     @Query("SELECT * FROM purchases WHERE id = :id") fun observeById(id: String): Flow<PurchaseEntity?>
     @Query("SELECT * FROM purchase_lines WHERE purchaseId = :purchaseId ORDER BY rowid") fun observeLines(purchaseId: String): Flow<List<PurchaseLineEntity>>

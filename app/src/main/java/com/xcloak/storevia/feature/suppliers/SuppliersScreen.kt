@@ -26,6 +26,7 @@ fun SuppliersScreen(onBack: () -> Unit, onOpen: (String) -> Unit, vm: SuppliersV
     val query by vm.query.collectAsStateWithLifecycle()
     val payable by vm.totalPayable.collectAsStateWithLifecycle()
     var adding by remember { mutableStateOf(false) }
+    var payableOnly by remember { mutableStateOf(false) }
 
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
@@ -50,15 +51,28 @@ fun SuppliersScreen(onBack: () -> Unit, onOpen: (String) -> Unit, vm: SuppliersV
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
             )
             val list = rows
+            FilterChip(
+                selected = payableOnly,
+                onClick = { payableOnly = !payableOnly },
+                label = { Text(stringResource(R.string.suppliers_payable_filter)) },
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 2.dp),
+            )
+            val filtered = list?.filter { !payableOnly || it.balancePaise > 0 }
             when {
                 list == null -> LoadingState(Modifier.weight(1f).fillMaxWidth())
-                list.isEmpty() -> Column(Modifier.fillMaxSize().padding(32.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text(stringResource(R.string.suppliers_empty), style = MaterialTheme.typography.titleMedium)
-                    Spacer(Modifier.height(8.dp))
-                    Text(stringResource(R.string.suppliers_empty_hint), style = MaterialTheme.typography.bodyMedium)
+                filtered.isNullOrEmpty() -> Column(Modifier.weight(1f).fillMaxWidth().padding(32.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
+                    val noSuppliersYet = list.isEmpty() && query.isBlank() && !payableOnly
+                    Text(
+                        stringResource(if (noSuppliersYet) R.string.suppliers_empty else R.string.suppliers_no_matches),
+                        style = MaterialTheme.typography.titleMedium,
+                    )
+                    if (noSuppliersYet) {
+                        Spacer(Modifier.height(8.dp))
+                        Text(stringResource(R.string.suppliers_empty_hint), style = MaterialTheme.typography.bodyMedium)
+                    }
                 }
-                else -> LazyColumn(contentPadding = PaddingValues(bottom = 96.dp)) {
-                    items(list, key = { it.id }) { r ->
+                else -> LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 96.dp)) {
+                    items(filtered, key = { it.id }) { r ->
                         ListItem(
                             modifier = Modifier.clickable { onOpen(r.id) },
                             headlineContent = { Text(r.name, style = MaterialTheme.typography.titleMedium) },
