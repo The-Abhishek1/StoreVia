@@ -7,6 +7,7 @@ import com.xcloak.storevia.core.database.dao.CategoryDao
 import com.xcloak.storevia.core.database.dao.BranchDao
 import com.xcloak.storevia.core.database.dao.ProductDao
 import com.xcloak.storevia.core.database.dao.ProductListRow
+import com.xcloak.storevia.core.database.dao.observeActiveBranchId
 import com.xcloak.storevia.core.database.entity.CategoryEntity
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -32,9 +33,12 @@ class StockListViewModel @Inject constructor(
     val categories: StateFlow<List<CategoryEntity>> =
         categoryDao.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    private val activeBranchId = branchDao.observeSelectedId().map { it ?: "default" }.distinctUntilChanged()
+    private val activeBranchId = branchDao.observeActiveBranchId()
+    val activeBranchName: StateFlow<String?> = combine(branchDao.observeAll(), activeBranchId) { branches, branchId ->
+        branches.firstOrNull { it.id == branchId }?.name
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
-    val rows: StateFlow<List<ProductListRow>?> = combine(_query, _category, activeBranchId) { q, c, branchId ->
+    val rows: StateFlow<List<ProductListRow>?> = combine(_query, _category, activeBranchId.filterNotNull()) { q, c, branchId ->
         Triple(q.trim(), c, branchId)
     }.flatMapLatest { (q, c, branchId) ->
         if (c == null) productDao.listWithStock(q, branchId) else productDao.listWithStockByCategory(q, c, branchId)
@@ -47,6 +51,7 @@ class StockListViewModel @Inject constructor(
         viewModelScope.launch {
             handle.getStateFlow<String?>("barcode", null).filterNotNull().collect {
                 _query.value = it
+                _category.value = null
                 handle["barcode"] = null
             }
         }

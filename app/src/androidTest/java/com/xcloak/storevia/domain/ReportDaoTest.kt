@@ -95,6 +95,16 @@ class ReportDaoTest {
         assertEquals(0, allBranches.size)
     }
 
+    @Test fun stockProductRowsShowOnlyTheSelectedBranchQuantity() = runBlocking {
+        val dao = db.productDao()
+        val main = dao.listWithStock("", "default").first().single()
+        val second = dao.listWithStock("", "branch-2").first().single()
+
+        assertEquals(4_000L, main.onHandMilli)
+        assertEquals(2_000L, second.onHandMilli)
+        assertEquals(main.id, second.id)
+    }
+
     @Test fun dashboardSalesAndStockAlertsStayOnTheirBranch() = runBlocking {
         db.saleDao().insertSale(
             SaleEntity(

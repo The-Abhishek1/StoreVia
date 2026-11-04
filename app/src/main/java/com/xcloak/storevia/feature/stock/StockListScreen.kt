@@ -37,6 +37,7 @@ fun StockListScreen(
     val query by vm.query.collectAsStateWithLifecycle()
     val categories by vm.categories.collectAsStateWithLifecycle()
     val selectedCategory by vm.category.collectAsStateWithLifecycle()
+    val activeBranchName by vm.activeBranchName.collectAsStateWithLifecycle()
 
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
@@ -56,6 +57,15 @@ fun StockListScreen(
                 },
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
             )
+
+            activeBranchName?.let { branchName ->
+                Text(
+                    stringResource(R.string.stock_branch_scope, branchName),
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
 
             if (categories.isNotEmpty()) {
                 androidx.compose.foundation.lazy.LazyRow(

@@ -7,6 +7,8 @@ import androidx.room.Query
 import androidx.room.Update
 import com.xcloak.storevia.core.database.entity.*
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import java.time.LocalDate
 
 @Dao
@@ -45,6 +47,10 @@ interface BranchDao {
 }
 
 suspend fun BranchDao.activeBranchId(): String = selectedId() ?: firstId() ?: "default"
+
+fun BranchDao.observeActiveBranchId(): Flow<String?> = combine(observeAll(), observeSelectedId()) { branches, selectedId ->
+    selectedId?.takeIf { id -> branches.any { it.id == id } } ?: branches.firstOrNull()?.id
+}.distinctUntilChanged()
 
 @Dao
 interface UnitDao {

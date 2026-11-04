@@ -14,6 +14,7 @@
 
     <!-- Stock list -->
     <string name="stock_search_hint">Search name, SKU or barcode</string>
+    <string name="stock_branch_scope">Inventory for %1$s</string>
     <string name="stock_empty">No products yet</string>
     <string name="stock_empty_hint">Add your first product to start tracking stock.</string>
     <string name="stock_no_match">No product matches “%1$s”</string>

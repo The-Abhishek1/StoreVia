@@ -14,6 +14,7 @@ import com.xcloak.storevia.core.database.dao.RecipeDao
 import com.xcloak.storevia.core.database.dao.SerialNumberDao
 import com.xcloak.storevia.core.database.dao.StockMovementDao
 import com.xcloak.storevia.core.database.dao.UnitDao
+import com.xcloak.storevia.core.database.dao.observeActiveBranchId
 import com.xcloak.storevia.core.database.entity.BatchEntity
 import com.xcloak.storevia.core.database.entity.MovementType
 import com.xcloak.storevia.core.database.entity.StockMovementEntity
@@ -82,7 +83,7 @@ class ProductDetailViewModel @Inject constructor(
     val ingredientOptions: StateFlow<List<ProductEntity>> =
         productDao.observeActiveSellable().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    private val activeBranchId = branchDao.observeSelectedId().map { it ?: "default" }.distinctUntilChanged()
+    private val activeBranchId = branchDao.observeActiveBranchId().filterNotNull()
     private val base = activeBranchId.flatMapLatest { branchId ->
         combine(
             productDao.observeById(id),
