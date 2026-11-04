@@ -23,9 +23,12 @@ object SyncTables {
     /** Parents before children, so foreign keys are satisfied while pulling. Held bills and sync state stay on the phone. */
     val all: List<SyncTable> = listOf(
         SyncTable("store", SyncKind.MUTABLE, localOnly = setOf("nextInvoiceNo"), localDefaults = mapOf("nextInvoiceNo" to 1L)),
+        SyncTable("branches", SyncKind.MUTABLE, localOnly = setOf("selectedOnDevice"), localDefaults = mapOf("selectedOnDevice" to false)),
         SyncTable("units", SyncKind.MUTABLE),
         SyncTable("categories", SyncKind.MUTABLE),
         SyncTable("products", SyncKind.MUTABLE),
+        SyncTable("recipe_components", SyncKind.MUTABLE),
+        SyncTable("serial_numbers", SyncKind.MUTABLE),
         SyncTable("product_barcodes", SyncKind.MUTABLE),
         SyncTable("batches", SyncKind.APPEND_ONLY),
         SyncTable("suppliers", SyncKind.MUTABLE),

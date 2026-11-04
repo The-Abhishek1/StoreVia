@@ -22,7 +22,6 @@ import androidx.navigation.compose.rememberNavController
 import com.xcloak.storevia.core.access.Permission
 import androidx.navigation.navArgument
 import com.xcloak.storevia.R
-import com.xcloak.storevia.feature.admin.PlatformAdminScreen
 import com.xcloak.storevia.feature.customers.CustomerDetailScreen
 import com.xcloak.storevia.feature.customers.CustomersScreen
 import com.xcloak.storevia.feature.cloud.CloudAccountScreen
@@ -59,7 +58,7 @@ private object Routes {
     const val REPORTS = "reports"
     const val MORE = "more"
     const val PRODUCT = "product/{id}"
-    const val EDIT = "product_edit?id={id}&barcode={barcode}"
+    const val EDIT = "product_edit?id={id}&barcode={barcode}&parentId={parentId}"
     const val SCANNER = "scanner"
     const val CHECKOUT = "checkout"
     const val SALE = "sale/{id}"
@@ -79,7 +78,6 @@ private object Routes {
     const val PURCHASE = "purchase/{id}"
     const val REORDER = "reorder"
     const val DATA = "import_export"
-    const val PLATFORM_ADMIN = "platform_admin"
     const val CLOUD_ACCOUNT = "cloud_account"
     const val CUSTOMER = "customer/{id}"
 
@@ -90,10 +88,11 @@ private object Routes {
     fun supplier(id: String) = "supplier/$id"
     fun purchase(id: String) = "purchase/$id"
     fun purchaseEdit(supplierId: String? = null) = "purchase_edit" + (supplierId?.let { "?supplierId=${Uri.encode(it)}" } ?: "")
-    fun edit(id: String? = null, barcode: String? = null): String {
+    fun edit(id: String? = null, barcode: String? = null, parentId: String? = null): String {
         val parts = buildList {
             id?.let { add("id=${Uri.encode(it)}") }
             barcode?.let { add("barcode=${Uri.encode(it)}") }
+            parentId?.let { add("parentId=${Uri.encode(it)}") }
         }
         return "product_edit" + if (parts.isEmpty()) "" else "?" + parts.joinToString("&")
     }
@@ -109,7 +108,7 @@ private enum class Tab(val route: String, val label: Int, val icon: ImageVector)
 
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
-fun StoreviaNavHost(localOnly: Boolean = false) {
+fun StoreviaNavHost(localOnly: Boolean = false, onExitLocalOnly: () -> Unit = {}) {
     val nav = rememberNavController()
     val current by nav.currentBackStackEntryAsState()
     val route = current?.destination?.route
@@ -140,6 +139,7 @@ fun StoreviaNavHost(localOnly: Boolean = false) {
                                 color = MaterialTheme.colorScheme.onSecondaryContainer,
                             )
                             TextButton(onClick = { nav.navigate(Routes.CLOUD_ACCOUNT) }) { Text(stringResource(R.string.cloud_connect)) }
+                            TextButton(onClick = onExitLocalOnly) { Text(stringResource(R.string.entry_exit_offline)) }
                         }
                     }
                 }
@@ -190,6 +190,8 @@ fun StoreviaNavHost(localOnly: Boolean = false) {
                 ProductDetailScreen(
                     onBack = { nav.popBackStack() },
                     onEdit = { nav.navigate(Routes.edit(id = it)) },
+                    onAddVariant = { nav.navigate(Routes.edit(parentId = it)) },
+                    onOpenVariant = { nav.navigate(Routes.product(it)) },
                 )
             }
 
@@ -198,16 +200,29 @@ fun StoreviaNavHost(localOnly: Boolean = false) {
                 arguments = listOf(
                     navArgument("id") { type = NavType.StringType; nullable = true; defaultValue = null },
                     navArgument("barcode") { type = NavType.StringType; nullable = true; defaultValue = null },
+                    navArgument("parentId") { type = NavType.StringType; nullable = true; defaultValue = null },
                 ),
-            ) {
+            ) { entry ->
                 ProductEditScreen(
                     onBack = { nav.popBackStack() },
                     onScan = { nav.navigate(Routes.SCANNER) },
                     onSaved = { id ->
-                        // New product -> open its detail; edited product -> return to it.
-                        nav.navigate(Routes.product(id)) {
-                            popUpTo(Routes.STOCK)
-                            launchSingleTop = true
+                        if (entry.arguments?.getString("parentId") != null) {
+                            nav.popBackStack()
+                        } else {
+                            val checkout = nav.previousBackStackEntry?.takeIf {
+                                it.destination.route == Routes.CHECKOUT
+                            }
+                            if (checkout != null) {
+                                checkout.savedStateHandle["createdProductId"] = id
+                                nav.popBackStack(Routes.CHECKOUT, inclusive = false)
+                            } else {
+                                // New product -> open its detail; edited product -> return to it.
+                                nav.navigate(Routes.product(id)) {
+                                    popUpTo(Routes.STOCK)
+                                    launchSingleTop = true
+                                }
+                            }
                         }
                     },
                     onArchived = { nav.popBackStack(Routes.STOCK, inclusive = false) },
@@ -233,6 +248,7 @@ fun StoreviaNavHost(localOnly: Boolean = false) {
                 CheckoutScreen(
                     onBack = { nav.popBackStack() },
                     onScan = { nav.navigate(Routes.SCANNER) },
+                    onCreateProduct = { barcode -> nav.navigate(Routes.edit(barcode = barcode)) },
                     onCompleted = { id ->
                         nav.navigate(Routes.sale(id)) { popUpTo(Routes.CHECKOUT) { inclusive = true } }
                     },
@@ -305,11 +321,9 @@ fun StoreviaNavHost(localOnly: Boolean = false) {
 
             composable(Routes.STORE_SETTINGS) { StoreSettingsScreen(onBack = { nav.popBackStack() }) }
 
-            composable(Routes.PLATFORM_ADMIN) { PlatformAdminScreen(onBack = { nav.popBackStack() }) }
             composable(Routes.CLOUD_ACCOUNT) {
                 CloudAccountScreen(
                     onBack = { nav.popBackStack() },
-                    onPlatformAdmin = { nav.navigate(Routes.PLATFORM_ADMIN) },
                 )
             }
 

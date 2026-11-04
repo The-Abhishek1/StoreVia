@@ -18,6 +18,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xcloak.storevia.R
 import kotlinx.coroutines.launch
+import com.xcloak.storevia.core.ui.LoadingState
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -42,7 +43,7 @@ fun CategoriesScreen(onBack: () -> Unit, vm: CategoriesViewModel = hiltViewModel
     ) { padding ->
         val list = rows
         when {
-            list == null -> Unit
+            list == null -> LoadingState(Modifier.padding(padding))
             list.isEmpty() -> Column(
                 Modifier.padding(padding).fillMaxSize().padding(32.dp),
                 verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally,

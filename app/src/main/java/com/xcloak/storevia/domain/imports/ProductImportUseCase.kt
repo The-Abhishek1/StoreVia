@@ -6,6 +6,7 @@ import com.xcloak.storevia.core.database.StorviaDatabase
 import com.xcloak.storevia.core.database.dao.BatchDao
 import com.xcloak.storevia.core.database.dao.ProductDao
 import com.xcloak.storevia.core.database.dao.StockMovementDao
+import com.xcloak.storevia.core.database.dao.activeBranchId
 import com.xcloak.storevia.core.database.entity.*
 import javax.inject.Inject
 
@@ -57,6 +58,7 @@ class ProductImportUseCase @Inject constructor(
                         gstRateBp = row.gstRateBp, taxInclusive = row.taxInclusive,
                         costPaise = row.costPaise, sellPricePaise = row.pricePaise, mrpPaise = row.mrpPaise ?: existing.mrpPaise,
                         minStockMilli = row.minStockMilli, trackExpiry = existing.trackExpiry || row.expiry != null,
+                        attributesJson = row.attributesJson ?: existing.attributesJson,
                         updatedAt = now, dirty = true,
                     )
                 )
@@ -69,23 +71,25 @@ class ProductImportUseCase @Inject constructor(
         }
 
     private suspend fun createProduct(row: ImportRow, now: Long) {
+        val branchId = db.branchDao().activeBranchId()
         val product = ProductEntity(
             name = row.name, sku = row.sku, unitId = row.unitId, hsnCode = row.hsn, gstRateBp = row.gstRateBp,
             taxInclusive = row.taxInclusive, mrpPaise = row.mrpPaise, sellPricePaise = row.pricePaise,
             costPaise = row.costPaise, trackExpiry = row.expiry != null, minStockMilli = row.minStockMilli,
+            attributesJson = row.attributesJson ?: "{}",
             createdAt = now,
         )
         productDao.insert(product)
         row.barcode?.let { productDao.insertBarcode(ProductBarcodeEntity(productId = product.id, barcode = it)) }
         if (row.openingQtyMilli > 0) {
             val batch = BatchEntity(
-                productId = product.id, batchNo = row.batchNo, expiryDate = row.expiry, costPaise = row.costPaise,
+                productId = product.id, branchId = branchId, batchNo = row.batchNo, expiryDate = row.expiry, costPaise = row.costPaise,
                 mrpPaise = row.mrpPaise, qtyReceivedMilli = row.openingQtyMilli, qtyOnHandMilli = row.openingQtyMilli, receivedAt = now,
             )
             batchDao.insert(batch)
             stockDao.insert(
                 StockMovementEntity(
-                    productId = product.id, batchId = batch.id, type = MovementType.OPENING, qtyMilli = row.openingQtyMilli,
+                    productId = product.id, branchId = branchId, batchId = batch.id, type = MovementType.OPENING, qtyMilli = row.openingQtyMilli,
                     unitCostPaise = row.costPaise, refType = "IMPORT", refId = batch.id, createdAt = now,
                 )
             )

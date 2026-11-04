@@ -40,7 +40,7 @@ create table if not exists public.devices (
   unique (store_id, series)
 );
 
--- Written only by the server (trial on creation, Google Play verification later). Clients can read, never write.
+-- Written only by the server (Free access on creation, Google Play verification later). Clients can read, never write.
 create table if not exists public.subscriptions (
   store_id text primary key,
   plan text not null default 'free',
@@ -57,7 +57,6 @@ update public.subscriptions
 set purchase_token_hash = encode(digest(purchase_token, 'sha256'), 'hex'), purchase_token = null
 where purchase_token is not null and purchase_token_hash is null;
 update public.subscriptions set purchase_token = null where purchase_token is not null;
-
 alter table public.subscriptions drop constraint if exists subscriptions_plan_check;
 update public.subscriptions set plan = 'free', expires_at = now() + interval '100 years' where plan = 'trial';
 alter table public.subscriptions add constraint subscriptions_plan_check check (plan in ('free','pro'));
@@ -74,9 +73,11 @@ create table if not exists public.platform_admins (
 
 create table if not exists public.platform_store_metadata (
   store_id text primary key,
-  store_type text not null default 'GENERAL' check (store_type in ('GENERAL','MEDICAL','WHOLESALER')),
+  store_type text not null default 'GENERAL',
   created_at timestamptz not null default now(),
-  updated_at timestamptz not null default now()
+  updated_at timestamptz not null default now(),
+  constraint platform_store_metadata_store_type_check
+    check (store_type in ('GENERAL','MEDICAL','WHOLESALER','RESTAURANT','CLOTHING','ELECTRONICS','SERVICE','OTHER'))
 );
 
 create table if not exists public.platform_payment_records (
@@ -121,7 +122,8 @@ begin
   if not exists (select 1 from public.platform_admins where user_id = p_actor_id) then
     raise exception 'platform administrator access required';
   end if;
-  if btrim(p_name) = '' or position('@' in p_owner_email) < 2 or p_store_type not in ('GENERAL','MEDICAL','WHOLESALER') then
+  if btrim(p_name) = '' or position('@' in p_owner_email) < 2 or
+     p_store_type not in ('GENERAL','MEDICAL','WHOLESALER','RESTAURANT','CLOTHING','ELECTRONICS','SERVICE','OTHER') then
     raise exception 'invalid store details';
   end if;
 
@@ -188,14 +190,41 @@ begin
   if auth.uid() is null then raise exception 'not signed in'; end if;
   if exists (select 1 from public.store_members where store_id = p_store_id) then raise exception 'store already exists'; end if;
   insert into public.store_members (store_id, user_id, role, display_name) values (p_store_id, auth.uid(), 'OWNER', p_name);
-  insert into public.subscriptions (store_id, plan, status, expires_at) values (p_store_id, 'free', 'active', now() + interval '100 years');
+  insert into public.subscriptions (store_id, plan, status, expires_at)   values (p_store_id, 'free', 'active', now() + interval '100 years');
 end;
 $$;
 
--- The shop the signed-in person belongs to (if any), and their role.
-create or replace function public.my_store() returns table (store_id text, role text)
+create or replace function public.create_store_with_details(
+  p_store_id text,
+  p_name text,
+  p_owner_name text,
+  p_store_type text
+) returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  if auth.uid() is null then raise exception 'not signed in'; end if;
+  if btrim(p_name) = '' or btrim(p_owner_name) = '' or
+     p_store_type not in ('GENERAL','MEDICAL','WHOLESALER','RESTAURANT','CLOTHING','ELECTRONICS','SERVICE','OTHER') then
+    raise exception 'invalid store details';
+  end if;
+  if exists (select 1 from public.store_members where store_id = p_store_id) then raise exception 'store already exists'; end if;
+  insert into public.store_members (store_id, user_id, role, display_name) values (p_store_id, auth.uid(), 'OWNER', btrim(p_owner_name));
+  insert into public.subscriptions (store_id, plan, status, expires_at) values (p_store_id, 'free', 'active', now() + interval '100 years');
+  insert into public.platform_store_metadata (store_id, store_type)
+    values (p_store_id, p_store_type)
+    on conflict (store_id) do update set store_type = excluded.store_type, updated_at = now();
+end;
+$$;
+
+-- The shop the signed-in person belongs to (if any), their role, and its configured store type.
+drop function if exists public.my_store();
+create function public.my_store() returns table (store_id text, role text, store_type text)
 language sql stable security definer set search_path = public as $$
-  select m.store_id, m.role from public.store_members m where m.user_id = auth.uid() order by m.created_at limit 1;
+  select m.store_id, m.role, coalesce(meta.store_type, 'GENERAL')
+  from public.store_members m
+  left join public.platform_store_metadata meta on meta.store_id = m.store_id
+  where m.user_id = auth.uid()
+  order by m.created_at limit 1;
 $$;
 
 -- Gives this phone its invoice series. Calling again with the same device returns the same series.
@@ -290,7 +319,9 @@ for update using (
 create table if not exists public."store" (
   "id" text not null,
   "name" text not null,
+  "owner_name" text not null,
   "address" text not null,
+  "city" text not null,
   "phone" text not null,
   "gstin" text,
   "state_code" text not null,
@@ -302,6 +333,8 @@ create table if not exists public."store" (
   server_updated_at timestamptz not null default clock_timestamp(),
   primary key ("id")
 );
+alter table public."store" add column if not exists "owner_name" text not null default '';
+alter table public."store" add column if not exists "city" text not null default '';
 create index if not exists "store_sync_idx" on public."store" (store_id, server_updated_at, "id");
 drop trigger if exists touch_server_updated_at on public."store";
 create trigger touch_server_updated_at before insert or update on public."store" for each row execute function public.touch_server_updated_at();
@@ -361,6 +394,8 @@ create policy "writers update" on public."categories" for update using (public.c
 create table if not exists public."products" (
   "id" text not null,
   "name" text not null,
+  "parent_product_id" text,
+  "variant_label" text,
   "sku" text,
   "category_id" text,
   "unit_id" text not null,
@@ -371,8 +406,10 @@ create table if not exists public."products" (
   "sell_price_paise" bigint not null,
   "cost_paise" bigint not null,
   "track_expiry" integer not null,
+  "serial_tracked" integer not null,
   "min_stock_milli" bigint not null,
   "is_active" integer not null,
+  "attributes_json" text not null,
   "created_at" bigint not null,
   "updated_at" bigint not null,
   "deleted_at" bigint,
@@ -380,6 +417,9 @@ create table if not exists public."products" (
   server_updated_at timestamptz not null default clock_timestamp(),
   primary key ("id")
 );
+alter table public."products" add column if not exists "attributes_json" text not null default '{}';
+alter table public."products" add column if not exists "parent_product_id" text;
+alter table public."products" add column if not exists "variant_label" text;
 create index if not exists "products_sync_idx" on public."products" (store_id, server_updated_at, "id");
 drop trigger if exists touch_server_updated_at on public."products";
 create trigger touch_server_updated_at before insert or update on public."products" for each row execute function public.touch_server_updated_at();
@@ -390,6 +430,55 @@ drop policy if exists "writers insert" on public."products";
 create policy "writers insert" on public."products" for insert with check (public.can_write(store_id, array['OWNER','MANAGER']));
 drop policy if exists "writers update" on public."products";
 create policy "writers update" on public."products" for update using (public.can_write(store_id, array['OWNER','MANAGER'])) with check (public.can_write(store_id, array['OWNER','MANAGER']));
+
+-- recipe_components: mutable
+create table if not exists public."recipe_components" (
+  "id" text not null,
+  "recipe_product_id" text not null,
+  "ingredient_product_id" text not null,
+  "quantity_per_unit_milli" bigint not null,
+  "updated_at" bigint not null,
+  "deleted_at" bigint,
+  store_id text not null,
+  server_updated_at timestamptz not null default clock_timestamp(),
+  primary key ("id")
+);
+create index if not exists "recipe_components_sync_idx" on public."recipe_components" (store_id, server_updated_at, "id");
+drop trigger if exists touch_server_updated_at on public."recipe_components";
+create trigger touch_server_updated_at before insert or update on public."recipe_components" for each row execute function public.touch_server_updated_at();
+alter table public."recipe_components" enable row level security;
+drop policy if exists "members read" on public."recipe_components";
+create policy "members read" on public."recipe_components" for select using (public.is_member(store_id));
+drop policy if exists "writers insert" on public."recipe_components";
+create policy "writers insert" on public."recipe_components" for insert with check (public.can_write(store_id, array['OWNER','MANAGER']));
+drop policy if exists "writers update" on public."recipe_components";
+create policy "writers update" on public."recipe_components" for update using (public.can_write(store_id, array['OWNER','MANAGER'])) with check (public.can_write(store_id, array['OWNER','MANAGER']));
+
+-- serial_numbers: mutable
+create table if not exists public."serial_numbers" (
+  "id" text not null,
+  "product_id" text not null,
+  "batch_id" text not null,
+  "serial_number" text not null,
+  "status" text not null,
+  "sale_line_id" text,
+  "updated_at" bigint not null,
+  "deleted_at" bigint,
+  store_id text not null,
+  server_updated_at timestamptz not null default clock_timestamp(),
+  primary key ("id")
+);
+create unique index if not exists "serial_numbers_store_serial_unique" on public."serial_numbers" (store_id, "serial_number");
+create index if not exists "serial_numbers_sync_idx" on public."serial_numbers" (store_id, server_updated_at, "id");
+drop trigger if exists touch_server_updated_at on public."serial_numbers";
+create trigger touch_server_updated_at before insert or update on public."serial_numbers" for each row execute function public.touch_server_updated_at();
+alter table public."serial_numbers" enable row level security;
+drop policy if exists "members read" on public."serial_numbers";
+create policy "members read" on public."serial_numbers" for select using (public.is_member(store_id));
+drop policy if exists "writers insert" on public."serial_numbers";
+create policy "writers insert" on public."serial_numbers" for insert with check (public.can_write(store_id, array['OWNER','MANAGER']));
+drop policy if exists "writers update" on public."serial_numbers";
+create policy "writers update" on public."serial_numbers" for update using (public.can_write(store_id, array['OWNER','MANAGER'])) with check (public.can_write(store_id, array['OWNER','MANAGER']));
 
 -- product_barcodes: mutable
 create table if not exists public."product_barcodes" (
@@ -790,3 +879,5 @@ drop policy if exists "members read" on public."audit_log";
 create policy "members read" on public."audit_log" for select using (public.is_member(store_id));
 drop policy if exists "writers insert" on public."audit_log";
 create policy "writers insert" on public."audit_log" for insert with check (public.can_write(store_id, array['OWNER','MANAGER','CASHIER']));
+
+notify pgrst, 'reload schema';

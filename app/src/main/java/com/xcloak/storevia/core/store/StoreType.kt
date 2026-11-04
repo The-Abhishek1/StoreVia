@@ -3,7 +3,12 @@ package com.xcloak.storevia.core.store
 enum class StoreType {
     GENERAL,
     MEDICAL,
-    WHOLESALER;
+    WHOLESALER,
+    RESTAURANT,
+    CLOTHING,
+    ELECTRONICS,
+    SERVICE,
+    OTHER;
 
     companion object {
         fun fromName(value: String?): StoreType = entries.firstOrNull { it.name.equals(value, ignoreCase = true) } ?: GENERAL
@@ -52,6 +57,14 @@ object StoreTypeConfig {
             supportsPrescriptionWorkflow = false,
             supportsCloudSync = true,
             supportsMultiStoreAdmin = false,
+        )
+        StoreType.RESTAURANT, StoreType.CLOTHING, StoreType.ELECTRONICS,
+        StoreType.SERVICE, StoreType.OTHER -> StoreFeatureSet(
+            supportsExpiryTracking = false,
+            supportsBatchTracking = false,
+            supportsKhata = true,
+            supportsSupplierLedger = true,
+            supportsCloudSync = true,
         )
     }
 }

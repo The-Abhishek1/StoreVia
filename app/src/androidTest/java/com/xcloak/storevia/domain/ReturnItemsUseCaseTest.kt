@@ -119,4 +119,29 @@ class ReturnItemsUseCaseTest {
         }
         assertEquals(0L, db.saleDao().getById(id)!!.returnedPaise)   // rolled back
     }
+
+    @Test fun partialRecipeReturnsRestoreEachConsumedBatchExactlyOnce() = runBlocking {
+        val recipe = ProductEntity(name = "Meal", unitId = product.unitId, sellPricePaise = 2_000)
+        db.productDao().insert(recipe)
+        db.recipeDao().insert(
+            RecipeComponentEntity(
+                recipeProductId = recipe.id,
+                ingredientProductId = product.id,
+                quantityPerUnitMilli = 1_000,
+            ),
+        )
+        val id = sell(
+            listOf(CartItem(recipe.id, 5_000, 2_000)),
+            cash(10_000),
+            today = today,
+        )
+
+        giveBack(id, listOf(ReturnItem(recipe.id, 3_000)))
+        giveBack(id, listOf(ReturnItem(recipe.id, 2_000)))
+
+        assertEquals(5_000L, db.batchDao().getById(batchA)!!.qtyOnHandMilli)
+        assertEquals(5_000L, db.batchDao().getById(batchB)!!.qtyOnHandMilli)
+        assertEquals(10_000L, db.stockMovementDao().ledgerTotal(product.id))
+        assertEquals(0L, db.stockMovementDao().ledgerTotal(recipe.id))
+    }
 }

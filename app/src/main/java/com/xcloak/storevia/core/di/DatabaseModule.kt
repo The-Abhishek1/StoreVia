@@ -16,12 +16,23 @@ object DatabaseModule {
     @Provides @Singleton
     fun db(@ApplicationContext ctx: Context): StorviaDatabase =
         Room.databaseBuilder(ctx, StorviaDatabase::class.java, "storevia.db")
-            .addMigrations(StorviaDatabase.MIGRATION_1_2)
+            .addMigrations(
+                StorviaDatabase.MIGRATION_1_2,
+                StorviaDatabase.MIGRATION_2_3,
+                StorviaDatabase.MIGRATION_3_4,
+                StorviaDatabase.MIGRATION_4_5,
+                StorviaDatabase.MIGRATION_5_6,
+                StorviaDatabase.MIGRATION_6_7,
+                StorviaDatabase.MIGRATION_7_8,
+            )
             .build()
 
     @Provides fun storeDao(db: StorviaDatabase) = db.storeDao()
+    @Provides fun branchDao(db: StorviaDatabase) = db.branchDao()
     @Provides fun unitDao(db: StorviaDatabase) = db.unitDao()
     @Provides fun productDao(db: StorviaDatabase) = db.productDao()
+    @Provides fun recipeDao(db: StorviaDatabase) = db.recipeDao()
+    @Provides fun serialNumberDao(db: StorviaDatabase) = db.serialNumberDao()
     @Provides fun batchDao(db: StorviaDatabase) = db.batchDao()
     @Provides fun stockDao(db: StorviaDatabase) = db.stockMovementDao()
     @Provides fun customerDao(db: StorviaDatabase) = db.customerDao()

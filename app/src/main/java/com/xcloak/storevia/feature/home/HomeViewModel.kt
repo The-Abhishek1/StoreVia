@@ -23,8 +23,10 @@ data class HomeState(
     val lowStockCount: Int = 0,
     val expiringCount: Int = 0,
     val khataDuePaise: Long = 0,
+    val expiryWarnDays: Int = 30,
 )
 
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 @HiltViewModel
 class HomeViewModel @Inject constructor(
     bootstrap: AppBootstrap,
@@ -53,13 +55,21 @@ class HomeViewModel @Inject constructor(
     private val from = today.atStartOfDay(zone).toInstant().toEpochMilli()
     private val to = today.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
 
+    val expiringCount: Flow<Pair<Int, Int>> = prefs.settings
+        .map { it.expiryWarnDays.coerceAtLeast(1) }
+        .distinctUntilChanged()
+        .flatMapLatest { days ->
+            val from = LocalDate.now()
+            batchDao.observeExpiringCount(from, from.plusDays(days.toLong())).map { it to days }
+        }
+
     val state: StateFlow<HomeState> = combine(
         saleDao.observeSummary(from, to),
         productDao.observeCount(),
         batchDao.observeLowStock().map { it.size },
-        batchDao.observeExpiringCount(today, today.plusDays(30)),
+        expiringCount,
         customerDao.observeTotalDue(),
     ) { s, products, low, expiring, khata ->
-        HomeState(s.totalPaise, s.count, products, low, expiring, khata)
+        HomeState(s.totalPaise, s.count, products, low, expiring.first, khata, expiring.second)
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), HomeState())
 }

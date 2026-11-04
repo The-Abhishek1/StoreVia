@@ -5,11 +5,13 @@ import com.xcloak.storevia.data.AppBootstrap
 import com.xcloak.storevia.core.database.StorviaDatabase
 import com.xcloak.storevia.core.database.dao.StoreDao
 import com.xcloak.storevia.core.sync.SyncEngine
+import com.xcloak.storevia.core.store.StoreType
 import com.xcloak.storevia.data.backup.BackupManager
 import com.xcloak.storevia.data.prefs.AppPrefs
 import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.auth.providers.builtin.Email
+import io.github.jan.supabase.auth.providers.builtin.Phone
 import io.github.jan.supabase.functions.functions
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.from
@@ -25,6 +27,7 @@ import kotlinx.serialization.json.put
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
@@ -83,7 +86,14 @@ class CloudAccountRepository @Inject constructor(
                     put("email", email.trim())
                 }
                 connection.outputStream.use { it.write(body.toString().toByteArray(StandardCharsets.UTF_8)) }
-                check(connection.responseCode in 200..299) { "Could not resend confirmation (HTTP ${connection.responseCode})." }
+                val responseCode = connection.responseCode
+                if (responseCode !in 200..299) {
+                    val responseBody = connection.errorStream
+                        ?.bufferedReader(StandardCharsets.UTF_8)
+                        ?.use { it.readText() }
+                        .orEmpty()
+                    throw IOException("Confirmation resend failed (HTTP $responseCode): $responseBody")
+                }
             } finally {
                 connection.disconnect()
             }
@@ -99,12 +109,32 @@ class CloudAccountRepository @Inject constructor(
         prefs.update { copy(localOnlyMode = false) }
     }
 
+    suspend fun signInWithPhone(phone: String, password: String) {
+        requireConfigured()
+        client.auth.signInWith(Phone) {
+            this.phone = phone
+            this.password = password
+        }
+        prefs.update { copy(localOnlyMode = false) }
+    }
+
+    suspend fun sendPasswordReset(email: String) {
+        requireConfigured()
+        client.auth.resetPasswordForEmail(email.trim(), redirectUrl = AUTH_CALLBACK_URL)
+    }
+
     suspend fun signOut() {
         client.auth.signOut()
         prefs.update { copy(cloudStoreId = null, cloudRole = null, localOnlyMode = false) }
     }
 
-    suspend fun connectAndSync(): CloudSyncSummary {
+    suspend fun connectAndSync(): CloudSyncSummary =
+        checkNotNull(connectAndSync(createIfMissing = true))
+
+    suspend fun connectExistingStore(): CloudSyncSummary? =
+        connectAndSync(createIfMissing = false)
+
+    private suspend fun connectAndSync(createIfMissing: Boolean): CloudSyncSummary? {
         requireConfigured()
         check(client.auth.currentSessionOrNull() != null) { "Sign in to your cloud account first." }
         val localStore = checkNotNull(storeDao.get()) { "Finish setting up your store before enabling cloud sync." }
@@ -113,16 +143,21 @@ class CloudAccountRepository @Inject constructor(
         val membership = memberships.firstOrNull()
         val remoteStoreId = membership?.get("store_id")?.jsonPrimitive?.contentOrNull
         val role = membership?.get("role")?.jsonPrimitive?.contentOrNull
+        val remoteStoreType = membership?.get("store_type")?.jsonPrimitive?.contentOrNull
+            ?.let(StoreType::fromName)
+            ?: prefs.settings.value.storeType
 
         if (remoteStoreId == null) {
+            if (!createIfMissing) return null
             client.postgrest.rpc(
-                "create_store",
+                "create_store_with_details",
                 buildJsonObject {
                     put("p_store_id", localStore.id)
                     put("p_name", localStore.name)
+                    put("p_owner_name", localStore.ownerName)
+                    put("p_store_type", prefs.settings.value.storeType.name)
                 },
             )
-            prefs.update { copy(cloudStoreId = localStore.id, cloudRole = "OWNER", localOnlyMode = false) }
         } else if (remoteStoreId != localStore.id) {
             val previouslyLinkedStore = prefs.settings.value.cloudStoreId
             check(previouslyLinkedStore == null || previouslyLinkedStore == remoteStoreId) {
@@ -134,15 +169,29 @@ class CloudAccountRepository @Inject constructor(
             backupManager.autoBackup()
             val engine = SyncEngine(db, SupabaseRemote(client, remoteStoreId), remoteStoreId)
             engine.resetLocalData()
-            prefs.update { copy(cloudStoreId = remoteStoreId, cloudRole = role, localOnlyMode = false) }
             val result = syncMutex.withLock { engine.sync() }
+            prefs.update {
+                copy(
+                    cloudStoreId = remoteStoreId,
+                    cloudRole = role,
+                    storeType = remoteStoreType,
+                    localOnlyMode = false,
+                )
+            }
             bootstrap.ensureSeeded()
             return CloudSyncSummary(result.pushed, result.pulled)
-        } else {
-            prefs.update { copy(cloudStoreId = remoteStoreId, cloudRole = role) }
         }
 
-        val result = syncMutex.withLock { SyncEngine(db, SupabaseRemote(client, localStore.id), localStore.id).sync() }
+        val targetStoreId = remoteStoreId ?: localStore.id
+        val result = syncMutex.withLock { SyncEngine(db, SupabaseRemote(client, targetStoreId), targetStoreId).sync() }
+        prefs.update {
+            copy(
+                cloudStoreId = targetStoreId,
+                cloudRole = role ?: if (remoteStoreId == null) "OWNER" else cloudRole,
+                storeType = remoteStoreType,
+                localOnlyMode = false,
+            )
+        }
         bootstrap.ensureSeeded()
         return CloudSyncSummary(result.pushed, result.pulled)
     }

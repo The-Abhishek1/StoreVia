@@ -6,14 +6,18 @@ enum class Permission {
     SELL, APPLY_DISCOUNT, OVERRIDE_PRICE, SELL_ON_CREDIT,
     PROCESS_RETURN, CANCEL_BILL,
     MANAGE_CUSTOMERS, EDIT_CREDIT_LIMIT, RECEIVE_KHATA_PAYMENT,
-    MANAGE_PRODUCTS, VIEW_COST, ADJUST_STOCK, MANAGE_PURCHASES,
+    MANAGE_PRODUCTS, VIEW_COST, ADJUST_STOCK, MANAGE_PURCHASES, OVERRIDE_BATCH,
     VIEW_REPORTS, EXPORT_DATA, IMPORT_DATA,
     MANAGE_SETTINGS, BACKUP, RESTORE, MANAGE_STAFF, VIEW_AUDIT,
     MANAGE_PLATFORM, VIEW_PLATFORM_INSIGHTS,
 }
 
-/** The two things an owner can loosen for cashiers. Everything else is fixed per role. */
-data class CashierOptions(val canDiscount: Boolean = false, val canSellOnCredit: Boolean = false)
+/** The owner-configurable permissions granted to cashiers. */
+data class CashierOptions(
+    val canDiscount: Boolean = false,
+    val canSellOnCredit: Boolean = false,
+    val canOverrideBatch: Boolean = false,
+)
 
 object RolePermissions {
     private val platformPermissions = setOf(Permission.MANAGE_PLATFORM, Permission.VIEW_PLATFORM_INSIGHTS)
@@ -29,6 +33,7 @@ object RolePermissions {
             addAll(cashier)
             if (options.canDiscount) add(Permission.APPLY_DISCOUNT)
             if (options.canSellOnCredit) add(Permission.SELL_ON_CREDIT)
+            if (options.canOverrideBatch) add(Permission.OVERRIDE_BATCH)
         }
         Role.PLATFORM_ADMIN -> Permission.entries.toSet()
     }
@@ -60,7 +65,7 @@ enum class AuditAction {
     LOGIN, LOGIN_FAILED, STAFF_ADDED, STAFF_CHANGED, PIN_CHANGED,
     SALE_DISCOUNT, PRICE_OVERRIDE, RETURN, CANCEL_BILL, STOCK_ADJUST, STOCK_RECEIVED,
     PURCHASE, SUPPLIER_PAYMENT, KHATA_PAYMENT, OLD_BALANCE_ADDED, CREDIT_LIMIT_CHANGED,
-    PRODUCT_PRICE_CHANGED, PRODUCT_ARCHIVED, IMPORT, EXPORT, BACKUP, RESTORE, SETTINGS_CHANGED,
+    PRODUCT_PRICE_CHANGED, PRODUCT_ARCHIVED, IMPORT, EXPORT, BACKUP, RESTORE, SETTINGS_CHANGED, BATCH_OVERRIDE,
 }
 
 /** Where sensitive actions are recorded. Called inside the same transaction as the action itself. */

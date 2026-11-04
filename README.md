@@ -20,10 +20,19 @@ Android inventory, sales, expiry and khata app for small retailers. Kotlin, Jetp
 ## Build order from here
 ~~Product CRUD + barcode scan -> receive stock UI~~ (done in v0.2) -> ~~checkout screen~~ (done in v0.3) -> ~~khata screens~~ (done in v0.4) -> ~~returns and stock adjustments~~ (done in v0.5) -> ~~store setup + reports~~ (done in v0.6) -> ~~backup/restore + CSV import/export~~ (done in v0.7) -> ~~notifications + app lock~~ (done in v0.8) -> ~~checkout upgrades, cancel bill, categories, onboarding~~ (done in v0.9) -> ~~suppliers + purchases~~ (done in v0.9b) -> ~~roles + audit trail~~ (done in v0.10) -> v1.0 cloud foundation (auth, sync, encrypted cloud backup, verified Pro subscriptions, platform admin portal).
 
-## Dev note: schema changes before the first release
-The database is still version 1 and is changed in place while the app is unreleased. After pulling a new version,
-uninstall the debug app (or clear its data) so Room recreates the tables. From the first public release on,
-every schema change needs a Room migration and a migration test.
+## Dev note: schema changes
+The on-device Room schema is version 7. Migrations preserve existing local stores; do not uninstall or clear app data
+to apply a schema update. Every later schema change needs an additive Room migration and a migration test.
+
+## Inventory engine additions
+- Recipe/BOM products consume ingredient quantities from FEFO batches in the checkout transaction. Returns restore
+  the exact ingredient batches; repeated cart lines reserve stock cumulatively.
+- Serial tracking is available for whole-unit products. Receiving through stock-in or purchase entry records one
+  unique serial per unit; checkout assigns serials and returns release them for resale.
+- Relational sales import supports historical-only or live stock deduction, including recipe and serial-tracked
+  products. Exports support CSV, paginated PDF, numeric/filterable XLSX, and tabular DOCX.
+- Reports can filter by supplier based on purchase history. Branch filtering is not available until multi-branch
+  support is added to the data model.
 
 ## Cloud sync (v1.0a)
 - `core/sync/` is the engine: it pushes rows marked `dirty` and pulls rows newer than a saved server timestamp, per table.
@@ -33,8 +42,9 @@ every schema change needs a Room migration and a migration test.
   from the records after every pull. `CacheRebuilderTest` proves the formulas match what the app computes during real use.
 - Each phone gets its own invoice series (INV-00001, then INV-B-00001 on a second phone) so numbers never clash.
 - `supabase/schema.sql` is generated: run `python3 supabase/generate_schema.py` after changing an entity or `SyncTables.kt`.
-- More -> Cloud account provides email sign-up/sign-in, first-store cloud setup, account/role/plan status, manual sync, and sign-out.
-- Startup offers separate online sign-in and account creation choices, platform-admin sign-in, and local-only mode. Returning authenticated stores go directly to the dashboard. Work offline is an explicit local-only fallback with a persistent Connect account action; signing in there routes normal users to store setup/join and allowlisted admins to the admin portal.
+- Welcome separates Online Cloud, Offline store account, and a restricted Platform admin entry. Online Cloud offers distinct new-account and existing-account choices. New cloud signup is stepwise: select one of eight business types, enter required store/owner/mobile/address/city/state details (GSTIN remains optional), then create credentials with password confirmation and verify the email before connecting the store. Store and owner details sync to the cloud; the phone number is saved as store contact information.
+- Platform admins use a login-only route. The app verifies access with the `platform-admin` Edge Function and sends authorized users directly to the admin console; it never offers them store creation. Admin sign-out clears the cloud session and returns to Welcome.
+- Offline store account opens a local workspace without cloud registration. First-time setup collects local store details; the dashboard identifies local-only data and offers Connect to Cloud and Exit. Exit returns to Welcome without deleting the local database. Connecting a populated offline store to another cloud store is rejected rather than silently replacing local records.
 - After a successful connection, WorkManager runs sync every 15 minutes when the network is available. Signing out cancels scheduled sync.
 - A fresh phone can join an existing cloud store when it is still at untouched first-run setup; the app makes a local safety backup before replacing placeholder data. Connecting a populated phone to a different store is rejected without changing local data.
 - Backup and restore includes an encrypted cloud backup in the private `storevia-backups` bucket. Cloud upload requires a passphrase; restore still validates the archive and asks for final confirmation before replacing local data.

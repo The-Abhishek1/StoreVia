@@ -14,6 +14,7 @@ import com.xcloak.storevia.core.money.Money
 import com.xcloak.storevia.core.store.StoreFeatureSet
 import com.xcloak.storevia.core.store.StoreTypeConfig
 import com.xcloak.storevia.core.util.Parsing
+import com.xcloak.storevia.core.util.PackUnit
 import com.xcloak.storevia.data.prefs.AppPrefs
 import com.xcloak.storevia.domain.purchase.PurchaseException
 import com.xcloak.storevia.domain.purchase.PurchaseItem
@@ -36,12 +37,26 @@ data class PurchaseLineUi(
     val unitSymbol: String,
     val allowDecimal: Boolean,
     val trackExpiry: Boolean,
+    val serialTracked: Boolean,
     val qtyMilli: Long,
     val unitCostPaise: Long,
     val batchNo: String? = null,
     val expiry: LocalDate? = null,
+    val serialNumbersText: String = "",
+    val baseUnitSymbol: String = unitSymbol,
+    val baseAllowDecimal: Boolean = allowDecimal,
+    val packUnitSymbol: String? = null,
+    val packSizeMilli: Long? = null,
+    val usingPackUnit: Boolean = false,
 ) {
     val totalPaise: Long get() = Money(unitCostPaise).timesQtyMilli(qtyMilli).paise
+    val displayQtyMilli: Long
+        get() = if (usingPackUnit) PackUnit(packUnitSymbol!!, packSizeMilli!!).fromBaseQuantity(qtyMilli) else qtyMilli
+    fun withUnit(pack: Boolean) = copy(
+        unitSymbol = if (pack) packUnitSymbol!! else baseUnitSymbol,
+        allowDecimal = if (pack) false else baseAllowDecimal,
+        usingPackUnit = pack,
+    )
 }
 
 data class PurchaseUi(
@@ -131,17 +146,44 @@ class PurchaseEditViewModel @Inject constructor(
     fun addProduct(productId: String) = viewModelScope.launch {
         val p = productDao.getById(productId) ?: return@launch
         val unit = unitDao.getById(p.unitId)
-        val line = PurchaseLineUi(productId = p.id, name = p.name, unitSymbol = unit?.symbol.orEmpty(), allowDecimal = unit?.allowDecimal ?: false,
+        val pack = try {
+            PackUnit.fromAttributesJson(p.attributesJson)
+        } catch (_: IllegalArgumentException) {
+            _ui.update { it.copy(message = FieldError(R.string.err_product_pack_config)) }
+            return@launch
+        }
+        val line = PurchaseLineUi(
+            productId = p.id, name = listOfNotNull(p.name, p.variantLabel).joinToString(" · "),
+            unitSymbol = unit?.symbol.orEmpty(), allowDecimal = unit?.allowDecimal ?: false,
             trackExpiry = p.trackExpiry && features.value.supportsExpiryTracking,
-            qtyMilli = 1000, unitCostPaise = p.costPaise)
+            serialTracked = p.serialTracked,
+            qtyMilli = 1000, unitCostPaise = p.costPaise, baseUnitSymbol = unit?.symbol.orEmpty(),
+            baseAllowDecimal = unit?.allowDecimal ?: false, packUnitSymbol = pack?.name, packSizeMilli = pack?.baseUnitsPerPackMilli)
         edit { copy(lines = lines + line, query = "", editingLineId = line.lineId) }
     }
 
     /** @return a string-resource id for the problem, or null when the line was updated. */
-    fun updateLine(lineId: String, qtyText: String, costText: String, batchNo: String, expiry: LocalDate?): Int? {
+    fun updateLine(
+        lineId: String,
+        qtyText: String,
+        costText: String,
+        batchNo: String,
+        expiry: LocalDate?,
+        usingPackUnit: Boolean,
+        serialNumbersText: String = "",
+    ): Int? {
         val line = _ui.value.lines.firstOrNull { it.lineId == lineId } ?: return null
-        val qty = Parsing.qtyToMilli(qtyText, line.allowDecimal)
-        if (qty == null || qty <= 0) return if (line.allowDecimal) R.string.err_qty_invalid else R.string.err_qty_whole
+        val displayQty = Parsing.qtyToMilli(qtyText, if (usingPackUnit) false else line.baseAllowDecimal)
+        if (displayQty == null || displayQty <= 0) return if (!usingPackUnit && line.baseAllowDecimal) R.string.err_qty_invalid else R.string.err_qty_whole
+        val qty = if (usingPackUnit) {
+            val packSize = line.packSizeMilli ?: return R.string.err_product_pack_config
+            try { PackUnit(line.packUnitSymbol!!, packSize).toBaseQuantity(displayQty) }
+            catch (_: ArithmeticException) { return R.string.err_qty_invalid }
+        } else displayQty
+        val serials = serialNumbersText.split(',', '\n', '\r').map { it.trim() }.filter { it.isNotEmpty() }
+        if (line.serialTracked && (qty % 1_000L != 0L || serials.size.toLong() != qty / 1_000L)) return R.string.err_serial_count
+        if (line.serialTracked && serials.distinct().size != serials.size) return R.string.err_serial_duplicate
+        if (!line.serialTracked && serials.isNotEmpty()) return R.string.err_serial_not_tracked
         val cost = Parsing.moneyToPaise(costText) ?: return R.string.err_amount_invalid
         if (line.trackExpiry && expiry == null) return R.string.err_expiry_required
         edit {
@@ -149,8 +191,12 @@ class PurchaseEditViewModel @Inject constructor(
                 if (it.lineId == lineId) it.copy(
                     qtyMilli = qty,
                     unitCostPaise = cost,
+                    unitSymbol = if (usingPackUnit) it.packUnitSymbol!! else it.baseUnitSymbol,
+                    allowDecimal = if (usingPackUnit) false else it.baseAllowDecimal,
+                    usingPackUnit = usingPackUnit,
                     batchNo = batchNo.trim().ifEmpty { null }.takeIf { features.value.supportsBatchTracking },
                     expiry = expiry.takeIf { features.value.supportsExpiryTracking },
+                    serialNumbersText = serialNumbersText,
                 ) else it
             })
         }
@@ -167,7 +213,12 @@ class PurchaseEditViewModel @Inject constructor(
             _ui.update { it.copy(saving = true) }
             try {
                 val id = recordPurchase(
-                    items = s.lines.map { PurchaseItem(it.productId, it.qtyMilli, it.unitCostPaise, it.batchNo, it.expiry) },
+                    items = s.lines.map {
+                        PurchaseItem(
+                            it.productId, it.qtyMilli, it.unitCostPaise, it.batchNo, it.expiry,
+                            it.serialNumbersText.split(',', '\n', '\r').map(String::trim).filter(String::isNotEmpty),
+                        )
+                    },
                     supplierId = s.supplier?.id, invoiceNo = s.invoiceNo,
                     purchaseDateMillis = s.date.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli(),
                     billTotalPaise = total, paidPaise = paid, payMethod = if (paid > 0) s.method else null,
@@ -179,6 +230,8 @@ class PurchaseEditViewModel @Inject constructor(
                     PurchaseException.Reason.SUPPLIER_REQUIRED_FOR_CREDIT -> fail(R.string.err_supplier_for_credit)
                     PurchaseException.Reason.EXPIRY_REQUIRED -> fail(R.string.err_expiry_required_for, e.detail)
                     PurchaseException.Reason.NO_LINES -> fail(R.string.err_no_lines)
+                    PurchaseException.Reason.SERIAL_COUNT -> fail(R.string.err_serial_count)
+                    PurchaseException.Reason.SERIAL_DUPLICATE -> fail(R.string.err_serial_duplicate)
                     else -> fail(R.string.err_amount_invalid)
                 }
             } catch (e: com.xcloak.storevia.core.access.PermissionDeniedException) {

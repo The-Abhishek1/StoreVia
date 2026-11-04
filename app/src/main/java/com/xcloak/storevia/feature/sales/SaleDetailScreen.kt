@@ -23,6 +23,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xcloak.storevia.R
 import com.xcloak.storevia.core.access.Permission
 import com.xcloak.storevia.core.ui.can
+import com.xcloak.storevia.core.ui.LoadingState
 import com.xcloak.storevia.core.money.Money
 import com.xcloak.storevia.core.util.Parsing
 
@@ -45,7 +46,10 @@ fun SaleDetailScreen(onBack: () -> Unit, onReturn: (String) -> Unit, vm: SaleDet
                 }) { Icon(Icons.Filled.Share, stringResource(R.string.share_receipt)) }
             },
         )
-        if (r == null) return@Column
+        if (r == null) {
+            LoadingState(Modifier.weight(1f).fillMaxWidth())
+            return@Column
+        }
 
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(r.store.name, style = MaterialTheme.typography.titleLarge)
@@ -70,6 +74,12 @@ fun SaleDetailScreen(onBack: () -> Unit, onReturn: (String) -> Unit, vm: SaleDet
                     }
                     Text(Money(i.amountPaise).format(), style = MaterialTheme.typography.bodyLarge)
                 }
+            }
+            if (r.serialNumbers.isNotEmpty()) {
+                Text(
+                    stringResource(R.string.receipt_serial_numbers, r.serialNumbers.joinToString { it.serialNumber }),
+                    style = MaterialTheme.typography.bodySmall,
+                )
             }
             HorizontalDivider(Modifier.padding(vertical = 8.dp))
 

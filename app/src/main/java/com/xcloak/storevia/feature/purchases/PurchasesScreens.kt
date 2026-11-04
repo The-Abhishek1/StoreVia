@@ -28,6 +28,7 @@ import com.xcloak.storevia.core.database.dao.*
 import com.xcloak.storevia.core.database.entity.PurchaseEntity
 import com.xcloak.storevia.core.database.entity.PurchaseLineEntity
 import com.xcloak.storevia.core.money.Money
+import com.xcloak.storevia.core.ui.LoadingState
 import com.xcloak.storevia.core.util.Parsing
 import com.xcloak.storevia.domain.purchase.ReorderPlanner
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -65,7 +66,7 @@ fun PurchasesListScreen(onBack: () -> Unit, onNew: () -> Unit, onOpen: (String) 
     ) { padding ->
         val list = rows
         when {
-            list == null -> Unit
+            list == null -> LoadingState(Modifier.padding(padding))
             list.isEmpty() -> Column(Modifier.padding(padding).fillMaxSize().padding(32.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(stringResource(R.string.purchases_empty), style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(8.dp))
@@ -108,7 +109,10 @@ fun PurchaseDetailScreen(onBack: () -> Unit, vm: PurchaseDetailViewModel = hiltV
             title = { Text(stringResource(R.string.purchase_title)) },
             navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.back)) } },
         )
-        if (d == null) return@Column
+        if (d == null) {
+            LoadingState(Modifier.weight(1f).fillMaxWidth())
+            return@Column
+        }
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 20.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(d.supplierName ?: stringResource(R.string.cash_purchase), style = MaterialTheme.typography.titleLarge)
             Text(listOfNotNull(d.purchase.invoiceNo, d.purchase.purchaseDate.asDate()).joinToString(" · "), style = MaterialTheme.typography.bodyMedium)
@@ -159,7 +163,10 @@ fun ReorderScreen(onBack: () -> Unit, onNewPurchase: () -> Unit, vm: ReorderView
                 }) { Icon(Icons.Filled.Share, stringResource(R.string.share_list)) }
             },
         )
-        if (d == null) return@Column
+        if (d == null) {
+            LoadingState(Modifier.weight(1f).fillMaxWidth())
+            return@Column
+        }
         if (d.rows.isEmpty()) {
             Text(stringResource(R.string.reorder_none), Modifier.padding(24.dp), style = MaterialTheme.typography.bodyLarge)
             return@Column

@@ -1,6 +1,8 @@
 package com.xcloak.storevia.feature.home
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -22,7 +24,10 @@ fun HomeScreen(onNewSale: () -> Unit, onSetupStore: () -> Unit, onOnboarding: ()
     val needsOnboarding by vm.needsOnboarding.collectAsStateWithLifecycle()
     LaunchedEffect(needsOnboarding) { if (needsOnboarding) onOnboarding() }
 
-    Column(Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
+    ) {
         if (needsSetup && can(Permission.MANAGE_SETTINGS)) {
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.tertiaryContainer)) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -49,11 +54,10 @@ fun HomeScreen(onNewSale: () -> Unit, onSetupStore: () -> Unit, onOnboarding: ()
             Stat(stringResource(R.string.low_stock_items), s.lowStockCount.toString(), Modifier.weight(1f))
         }
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Stat(stringResource(R.string.expiring_soon), s.expiringCount.toString(), Modifier.weight(1f))
+            Stat(stringResource(R.string.expiring_soon, s.expiryWarnDays), s.expiringCount.toString(), Modifier.weight(1f))
             Stat(stringResource(R.string.khata_due_home), Money(s.khataDuePaise).format(), Modifier.weight(1f))
         }
 
-        Spacer(Modifier.weight(1f))
         Button(onClick = onNewSale, modifier = Modifier.fillMaxWidth().height(56.dp)) {
             Text(stringResource(R.string.new_sale))
         }

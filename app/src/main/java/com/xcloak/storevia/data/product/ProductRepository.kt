@@ -12,6 +12,7 @@ import javax.inject.Inject
 sealed interface SaveResult {
     data class Saved(val id: String) : SaveResult
     data class DuplicateBarcode(val productName: String) : SaveResult
+    data object InvalidVariantParent : SaveResult
 }
 
 class ProductRepository @Inject constructor(
@@ -23,6 +24,12 @@ class ProductRepository @Inject constructor(
     suspend fun save(product: ProductEntity, barcode: String?, isNew: Boolean): SaveResult =
         db.withTransaction {
             access.require(Permission.MANAGE_PRODUCTS)
+            if (product.parentProductId != null) {
+                val parent = productDao.getById(product.parentProductId)
+                if (parent == null || parent.deletedAt != null || parent.parentProductId != null ||
+                    productDao.hasStockHistory(parent.id)
+                ) return@withTransaction SaveResult.InvalidVariantParent
+            }
             val bc = barcode?.trim()?.takeIf { it.isNotEmpty() }
             if (bc != null) {
                 val existing = productDao.findByBarcode(bc)
@@ -42,6 +49,7 @@ class ProductRepository @Inject constructor(
                 productDao.softDeleteBarcodes(product.id, System.currentTimeMillis())
                 if (bc != null) productDao.insertBarcode(ProductBarcodeEntity(productId = product.id, barcode = bc))
             }
+            product.parentProductId?.let { productDao.softDeleteBarcodes(it, System.currentTimeMillis()) }
             SaveResult.Saved(product.id)
         }
 

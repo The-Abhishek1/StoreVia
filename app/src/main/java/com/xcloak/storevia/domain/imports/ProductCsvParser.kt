@@ -7,6 +7,9 @@ import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
 import java.time.format.ResolverStyle
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonObject
 
 data class ImportRow(
     val line: Int,
@@ -24,11 +27,12 @@ data class ImportRow(
     val openingQtyMilli: Long,
     val batchNo: String?,
     val expiry: LocalDate?,
+    val attributesJson: String? = null,
 )
 
 enum class ImportError {
     NAME_REQUIRED, PRICE_INVALID, COST_INVALID, MRP_INVALID, GST_INVALID, TAX_FLAG_INVALID,
-    QTY_INVALID, MIN_STOCK_INVALID, EXPIRY_INVALID, UNIT_UNKNOWN, DUPLICATE_IN_FILE,
+    QTY_INVALID, MIN_STOCK_INVALID, EXPIRY_INVALID, UNIT_UNKNOWN, DUPLICATE_IN_FILE, ATTRIBUTES_INVALID,
 }
 
 data class RowError(val line: Int, val error: ImportError, val detail: String = "")
@@ -63,6 +67,7 @@ object ProductCsvParser {
         "qty" to listOf("opening qty", "opening stock", "current stock", "stock", "quantity", "qty"),
         "batch" to listOf("batch", "batch no", "batch number"),
         "expiry" to listOf("expiry", "expiry date", "exp", "exp date"),
+        "attributes" to listOf("attributes json", "attributes", "custom fields"),
     )
 
     // STRICT on purpose: the default (SMART) silently turns 31 Feb into 28 Feb, which would hide a typo in an expiry date.
@@ -119,6 +124,16 @@ object ProductCsvParser {
             val expiryText = cell("expiry")
             val expiry = if (expiryText.isEmpty()) null else parseDate(expiryText).also { if (it == null) fail(ImportError.EXPIRY_INVALID, expiryText) }
 
+            val attributesText = cell("attributes")
+            val attributesJson = if (attributesText.isEmpty()) null else runCatching {
+                Json.parseToJsonElement(attributesText).jsonObject.also { attributes ->
+                    require(attributes.values.all { it is JsonPrimitive }) { "attributes must be simple key/value fields" }
+                }.toString()
+            }.getOrElse {
+                fail(ImportError.ATTRIBUTES_INVALID, attributesText)
+                null
+            }
+
             val barcode = cell("barcode").ifEmpty { null }
             if (barcode != null && !seenBarcodes.add(barcode)) fail(ImportError.DUPLICATE_IN_FILE, barcode)
 
@@ -128,6 +143,7 @@ object ProductCsvParser {
                 hsn = cell("hsn").ifEmpty { null }, gstRateBp = gstBp!!, taxInclusive = inclusive!!,
                 costPaise = cost!!, pricePaise = price!!, mrpPaise = mrp, minStockMilli = minStock!!,
                 openingQtyMilli = qty!!, batchNo = cell("batch").ifEmpty { null }, expiry = expiry,
+                attributesJson = attributesJson,
             )
         }
         return ParseResult(rows, errors, emptyList())

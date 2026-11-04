@@ -11,8 +11,10 @@ import com.xcloak.storevia.core.database.dao.UnitDao
 import com.xcloak.storevia.core.util.Csv
 import com.xcloak.storevia.data.export.CsvExporter
 import com.xcloak.storevia.data.export.ExportKind
+import com.xcloak.storevia.data.export.ExportFormat
 import com.xcloak.storevia.data.cloud.CloudAccountRepository
 import com.xcloak.storevia.domain.imports.*
+import com.xcloak.storevia.domain.imports.SalesImportStockMode
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -26,12 +28,20 @@ data class PendingImport(
     val preview: ImportPreview,
     val policy: DuplicatePolicy = DuplicatePolicy.SKIP,
 )
+data class PendingSalesImport(
+    val document: SalesImportDocument,
+    val validation: SalesImportValidation,
+    val stockMode: SalesImportStockMode = SalesImportStockMode.HISTORICAL_ONLY,
+)
 
 data class DataUi(
     val busy: Boolean = false,
     @StringRes val message: Int? = null,
     val messageArgs: List<Any> = emptyList(),
     val pending: PendingImport? = null,
+    val pendingSales: PendingSalesImport? = null,
+    val salesSummarySelected: Boolean = false,
+    val salesLinesSelected: Boolean = false,
     val proAccessChecked: Boolean = false,
     val proAccessEnabled: Boolean = false,
     val proAccessError: String? = null,
@@ -42,6 +52,7 @@ class ImportExportViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val exporter: CsvExporter,
     private val importer: ProductImportUseCase,
+    private val salesImporter: SalesImportUseCase,
     private val unitDao: UnitDao,
     private val access: Access,
     private val audit: AuditSink,
@@ -50,26 +61,37 @@ class ImportExportViewModel @Inject constructor(
 
     private val _ui = MutableStateFlow(DataUi())
     val ui: StateFlow<DataUi> = _ui.asStateFlow()
+    private var salesSummaryCsv: String? = null
+    private var salesLinesCsv: String? = null
 
     init { refreshProAccess() }
 
     fun dismissMessage() = _ui.update { it.copy(message = null, messageArgs = emptyList()) }
     fun cancelImport() = _ui.update { it.copy(pending = null) }
+    fun cancelSalesImport() {
+        salesSummaryCsv = null
+        salesLinesCsv = null
+        _ui.update {
+            it.copy(pendingSales = null, salesSummarySelected = false, salesLinesSelected = false)
+        }
+    }
     fun setPolicy(p: DuplicatePolicy) = _ui.update { s -> s.copy(pending = s.pending?.copy(policy = p)) }
+    fun setSalesStockMode(mode: SalesImportStockMode) =
+        _ui.update { s -> s.copy(pendingSales = s.pendingSales?.copy(stockMode = mode)) }
 
     fun refreshProAccess() = viewModelScope.launch { checkProAccess() }
 
-    fun export(kind: ExportKind, uri: Uri) = viewModelScope.launch {
+    fun export(kind: ExportKind, format: ExportFormat, uri: Uri) = viewModelScope.launch {
         if (kind != ExportKind.TEMPLATE && !access.actor().can(Permission.EXPORT_DATA)) {
             _ui.update { it.copy(message = R.string.err_permission_denied) }; return@launch
         }
         if (kind != ExportKind.TEMPLATE && !checkProAccess()) return@launch
         _ui.update { it.copy(busy = true) }
         val ok = try {
-            val text = exporter.build(kind)
-            withContext(Dispatchers.IO) { context.contentResolver.openOutputStream(uri)?.use { it.write(text.toByteArray(Charsets.UTF_8)) } != null }
+            val bytes = exporter.build(kind, format)
+            withContext(Dispatchers.IO) { context.contentResolver.openOutputStream(uri)?.use { it.write(bytes) } != null }
         } catch (_: Exception) { false }
-        if (ok && kind != ExportKind.TEMPLATE) audit.log(AuditAction.EXPORT, "Exported ${kind.name.lowercase()} to CSV")
+        if (ok && kind != ExportKind.TEMPLATE) audit.log(AuditAction.EXPORT, "Exported ${kind.name.lowercase()} as ${format.extension.uppercase()}")
         _ui.update { it.copy(busy = false, message = if (ok) R.string.export_done else R.string.export_failed) }
     }
 
@@ -88,6 +110,79 @@ class ImportExportViewModel @Inject constructor(
         val parse = ProductCsvParser.parse(table, unitDao.observeAll().first())
         val preview = importer.preview(parse.rows)
         _ui.update { it.copy(busy = false, pending = PendingImport(parse, preview)) }
+    }
+
+    fun readSalesSummary(uri: Uri) = readSalesCsv(uri, summary = true)
+    fun readSalesLines(uri: Uri) = readSalesCsv(uri, summary = false)
+
+    private fun readSalesCsv(uri: Uri, summary: Boolean) = viewModelScope.launch {
+        if (!access.actor().can(Permission.IMPORT_DATA)) {
+            _ui.update { it.copy(message = R.string.err_permission_denied) }
+            return@launch
+        }
+        if (!checkProAccess()) return@launch
+        _ui.update { it.copy(busy = true) }
+        val bytes = try {
+            withContext(Dispatchers.IO) { context.contentResolver.openInputStream(uri)?.use { readCapped(it) } }
+        } catch (_: Exception) {
+            null
+        }
+        if (bytes == null) {
+            _ui.update { it.copy(busy = false, message = R.string.import_too_big) }
+            return@launch
+        }
+        val text = bytes.toString(Charsets.UTF_8)
+        if (summary) salesSummaryCsv = text else salesLinesCsv = text
+        _ui.update {
+            it.copy(
+                busy = false,
+                salesSummarySelected = salesSummaryCsv != null,
+                salesLinesSelected = salesLinesCsv != null,
+            )
+        }
+        val summaryCsv = salesSummaryCsv
+        val linesCsv = salesLinesCsv
+        if (summaryCsv != null && linesCsv != null) {
+            val document = SalesImportParser.parse(summaryCsv, linesCsv)
+            val validation = salesImporter.validate(document)
+            _ui.update { it.copy(pendingSales = PendingSalesImport(document, validation)) }
+            salesSummaryCsv = null
+            salesLinesCsv = null
+        }
+    }
+
+    fun confirmSalesImport() {
+        val pending = _ui.value.pendingSales ?: return
+        if (!pending.validation.valid) return
+        viewModelScope.launch {
+            if (!access.actor().can(Permission.IMPORT_DATA)) {
+                _ui.update { it.copy(pendingSales = null, message = R.string.err_permission_denied) }
+                return@launch
+            }
+            if (!checkProAccess()) {
+                _ui.update { it.copy(pendingSales = null) }
+                return@launch
+            }
+            _ui.update { it.copy(busy = true) }
+            try {
+                val result = salesImporter.import(pending.document, pending.stockMode)
+                _ui.update {
+                    it.copy(
+                        busy = false,
+                        pendingSales = null,
+                        salesSummarySelected = false,
+                        salesLinesSelected = false,
+                        message = R.string.sales_import_result,
+                        messageArgs = listOf(result.imported),
+                    )
+                }
+            } catch (error: SalesImportValidationException) {
+                val validation = SalesImportValidation(error.errors)
+                _ui.update { it.copy(busy = false, pendingSales = pending.copy(validation = validation)) }
+            } catch (_: PermissionDeniedException) {
+                _ui.update { it.copy(busy = false, message = R.string.err_permission_denied) }
+            }
+        }
     }
 
     fun confirmImport() {

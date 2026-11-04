@@ -4,6 +4,7 @@ import androidx.room.withTransaction
 import com.xcloak.storevia.core.access.*
 import com.xcloak.storevia.core.database.StorviaDatabase
 import com.xcloak.storevia.core.database.dao.*
+import com.xcloak.storevia.core.database.dao.activeBranchId
 import com.xcloak.storevia.core.database.entity.*
 import com.xcloak.storevia.core.money.Money
 import java.time.LocalDate
@@ -15,10 +16,14 @@ data class PurchaseItem(
     val unitCostPaise: Long,
     val batchNo: String? = null,
     val expiry: LocalDate? = null,
+    val serialNumbers: List<String> = emptyList(),
 )
 
 class PurchaseException(val reason: Reason, val detail: String? = null) : Exception(reason.name) {
-    enum class Reason { NO_LINES, INVALID_QTY, INVALID_COST, PRODUCT_NOT_FOUND, EXPIRY_REQUIRED, INVALID_TOTAL, PAID_EXCEEDS_TOTAL, SUPPLIER_REQUIRED_FOR_CREDIT }
+    enum class Reason {
+        NO_LINES, INVALID_QTY, INVALID_COST, PRODUCT_NOT_FOUND, EXPIRY_REQUIRED, INVALID_TOTAL,
+        PAID_EXCEEDS_TOTAL, SUPPLIER_REQUIRED_FOR_CREDIT, SERIAL_COUNT, SERIAL_DUPLICATE,
+    }
 }
 
 /**
@@ -37,6 +42,7 @@ class RecordPurchaseUseCase @Inject constructor(
     private val supplierDao: SupplierDao,
     private val access: Access = OwnerAccess,
     private val audit: AuditSink = NoAudit,
+    private val serialNumberDao: SerialNumberDao = db.serialNumberDao(),
 ) {
     suspend operator fun invoke(
         items: List<PurchaseItem>,
@@ -55,6 +61,7 @@ class RecordPurchaseUseCase @Inject constructor(
         if (items.isEmpty()) throw PurchaseException(PurchaseException.Reason.NO_LINES)
 
         return db.withTransaction {
+            val branchId = db.branchDao().activeBranchId()
             val purchaseId = java.util.UUID.randomUUID().toString()
             val lines = mutableListOf<PurchaseLineEntity>()
 
@@ -63,16 +70,34 @@ class RecordPurchaseUseCase @Inject constructor(
                 if (item.qtyMilli <= 0) throw PurchaseException(PurchaseException.Reason.INVALID_QTY, product.name)
                 if (item.unitCostPaise < 0) throw PurchaseException(PurchaseException.Reason.INVALID_COST, product.name)
                 if (product.trackExpiry && item.expiry == null) throw PurchaseException(PurchaseException.Reason.EXPIRY_REQUIRED, product.name)
+                val serials = item.serialNumbers.map { it.trim() }.filter { it.isNotEmpty() }
+                if (product.serialTracked) {
+                    if (item.qtyMilli % 1_000L != 0L || serials.size.toLong() != item.qtyMilli / 1_000L) {
+                        throw PurchaseException(PurchaseException.Reason.SERIAL_COUNT, product.name)
+                    }
+                    if (serials.distinct().size != serials.size || serials.any { serialNumberDao.exists(it) }) {
+                        throw PurchaseException(PurchaseException.Reason.SERIAL_DUPLICATE, product.name)
+                    }
+                } else if (serials.isNotEmpty()) {
+                    throw PurchaseException(PurchaseException.Reason.SERIAL_COUNT, product.name)
+                }
 
                 val batch = BatchEntity(
-                    productId = product.id, batchNo = item.batchNo?.trim()?.ifEmpty { null }, expiryDate = item.expiry,
+                    productId = product.id, branchId = branchId, batchNo = item.batchNo?.trim()?.ifEmpty { null }, expiryDate = item.expiry,
                     costPaise = item.unitCostPaise, qtyReceivedMilli = item.qtyMilli, qtyOnHandMilli = item.qtyMilli,
                     receivedAt = purchaseDateMillis,
                 )
                 batchDao.insert(batch)
+                if (serials.isNotEmpty()) {
+                    serialNumberDao.insertAll(
+                        serials.map { serial ->
+                            SerialNumberEntity(productId = product.id, batchId = batch.id, serialNumber = serial)
+                        },
+                    )
+                }
                 stockDao.insert(
                     StockMovementEntity(
-                        productId = product.id, batchId = batch.id, type = MovementType.PURCHASE, qtyMilli = item.qtyMilli,
+                        productId = product.id, branchId = branchId, batchId = batch.id, type = MovementType.PURCHASE, qtyMilli = item.qtyMilli,
                         unitCostPaise = item.unitCostPaise, refType = "PURCHASE", refId = purchaseId, createdAt = now,
                     )
                 )
@@ -93,7 +118,7 @@ class RecordPurchaseUseCase @Inject constructor(
 
             purchaseDao.insert(
                 PurchaseEntity(
-                    id = purchaseId, supplierId = supplierId, invoiceNo = invoiceNo?.trim()?.ifEmpty { null },
+                    id = purchaseId, branchId = branchId, supplierId = supplierId, invoiceNo = invoiceNo?.trim()?.ifEmpty { null },
                     purchaseDate = purchaseDateMillis, totalPaise = total, paidPaise = paidPaise,
                     payMethod = if (paidPaise > 0) payMethod ?: PaymentMethod.CASH else null,
                     notes = notes?.trim()?.ifEmpty { null }, createdAt = now,

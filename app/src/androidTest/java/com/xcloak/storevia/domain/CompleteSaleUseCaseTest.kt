@@ -36,13 +36,13 @@ class CompleteSaleUseCaseTest {
 
     @After fun tearDown() = db.close()
 
-    private suspend fun seed(allowNegative: Boolean = true): ProductEntity {
+    private suspend fun seed(allowNegative: Boolean = true, serialTracked: Boolean = false): ProductEntity {
         db.storeDao().upsert(StoreEntity(name = "Test", allowNegativeStock = allowNegative))
         val unit = UnitEntity(name = "Piece", symbol = "pcs", allowDecimal = false)
         db.unitDao().insertAll(listOf(unit))
         val p = ProductEntity(
             name = "Biscuits", unitId = unit.id, sellPricePaise = 1000,
-            costPaise = 700, gstRateBp = 1800, taxInclusive = true,
+            costPaise = 700, gstRateBp = 1800, taxInclusive = true, serialTracked = serialTracked,
         )
         db.productDao().insert(p)
         return p
@@ -169,5 +169,75 @@ class CompleteSaleUseCaseTest {
         assertEquals(500L, pays.single { it.method == PaymentMethod.CASH }.amountPaise)
         assertEquals(1_500L, pays.single { it.method == PaymentMethod.UPI }.amountPaise)
         assertEquals(2_000L, db.saleDao().getById(id)!!.paidPaise)
+    }
+
+    @Test fun recipeSaleConsumesIngredientAndSnapshotsItsCost() = runBlocking {
+        val ingredient = seed(allowNegative = false)
+        val ingredientBatch = receive(ingredient.id, 5_000, 700, "ING", today.plusDays(30))
+        val recipe = ProductEntity(name = "Sandwich", unitId = ingredient.unitId, sellPricePaise = 2_000)
+        db.productDao().insert(recipe)
+        db.recipeDao().insert(
+            RecipeComponentEntity(
+                recipeProductId = recipe.id,
+                ingredientProductId = ingredient.id,
+                quantityPerUnitMilli = 1_000,
+            ),
+        )
+
+        val id = sell(listOf(CartItem(recipe.id, 3_000, 2_000)), cash(6_000), today = today)
+
+        assertEquals(2_000L, db.batchDao().getById(ingredientBatch)!!.qtyOnHandMilli)
+        assertEquals(700L, db.saleDao().getLines(id).single().costSnapshotPaise)
+        assertEquals(2_000L, db.stockMovementDao().ledgerTotal(ingredient.id))
+        assertEquals(0L, db.stockMovementDao().ledgerTotal(recipe.id))
+    }
+
+    @Test fun repeatedRecipeLinesCannotReserveTheSameIngredientStockTwice() = runBlocking {
+        val ingredient = seed(allowNegative = false)
+        val ingredientBatch = receive(ingredient.id, 3_000, 700, "ING", today.plusDays(30))
+        val recipe = ProductEntity(name = "Sandwich", unitId = ingredient.unitId, sellPricePaise = 2_000)
+        db.productDao().insert(recipe)
+        db.recipeDao().insert(
+            RecipeComponentEntity(
+                recipeProductId = recipe.id,
+                ingredientProductId = ingredient.id,
+                quantityPerUnitMilli = 1_000,
+            ),
+        )
+
+        try {
+            sell(
+                listOf(CartItem(recipe.id, 2_000, 2_000), CartItem(recipe.id, 2_000, 2_000)),
+                cash(8_000),
+                today = today,
+            )
+            fail("expected InsufficientStockException")
+        } catch (_: InsufficientStockException) { }
+
+        assertEquals(3_000L, db.batchDao().getById(ingredientBatch)!!.qtyOnHandMilli)
+        assertEquals(3_000L, db.stockMovementDao().ledgerTotal(ingredient.id))
+        assertEquals(1L, db.storeDao().get()!!.nextInvoiceNo)
+    }
+
+    @Test fun serialTrackedUnitsAreAssignedOnSaleAndReleasedOnReturn() = runBlocking {
+        val p = seed(allowNegative = false, serialTracked = true)
+        val batchId = receive(
+            productId = p.id,
+            qtyMilli = 2_000,
+            costPaise = 700,
+            batchNo = "SERIAL",
+            expiryDate = today.plusDays(30),
+            serialNumbers = listOf("SN-001", "SN-002"),
+        )
+        val id = sell(listOf(CartItem(p.id, 2_000, 1_000)), cash(2_000), today = today)
+        val soldLine = db.saleDao().getLines(id).single()
+        assertEquals(2, db.serialNumberDao().soldForSaleLine(soldLine.id).size)
+
+        ReturnItemsUseCase(db, db.saleDao(), db.batchDao(), db.stockMovementDao(), db.customerDao())
+            .invoke(id, listOf(ReturnItem(p.id, 1_000)))
+
+        assertEquals(1, db.serialNumberDao().soldForSaleLine(soldLine.id).size)
+        assertEquals(1, db.serialNumberDao().availableForBatch(p.id, batchId).size)
+        assertEquals(1_000L, db.batchDao().getById(batchId)!!.qtyOnHandMilli)
     }
 }

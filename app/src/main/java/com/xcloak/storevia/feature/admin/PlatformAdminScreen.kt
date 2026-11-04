@@ -1,5 +1,6 @@
 package com.xcloak.storevia.feature.admin
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -13,7 +14,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.People
 import androidx.compose.material.icons.filled.Refresh
@@ -55,7 +56,11 @@ private enum class AccountFilter { ALL, PRO, FREE, ACTIVE, INACTIVE, UNLINKED }
 
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
-fun PlatformAdminScreen(onBack: () -> Unit, vm: PlatformAdminViewModel = hiltViewModel()) {
+fun PlatformAdminScreen(
+    onSignOut: () -> Unit,
+    vm: PlatformAdminViewModel = hiltViewModel(),
+) {
+    BackHandler(onBack = onSignOut)
     val ui by vm.ui.collectAsStateWithLifecycle()
     var query by rememberSaveable { mutableStateOf("") }
     var filter by rememberSaveable { mutableStateOf(AccountFilter.ALL) }
@@ -97,8 +102,8 @@ fun PlatformAdminScreen(onBack: () -> Unit, vm: PlatformAdminViewModel = hiltVie
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(R.string.back))
+                    IconButton(onClick = onSignOut, enabled = !ui.busy) {
+                        Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = stringResource(R.string.cloud_sign_out))
                     }
                 },
                 actions = {

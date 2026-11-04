@@ -10,8 +10,8 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
@@ -20,11 +20,16 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xcloak.storevia.R
 import com.xcloak.storevia.core.access.Permission
 import com.xcloak.storevia.core.ui.can
+import com.xcloak.storevia.core.ui.LoadingState
 import com.xcloak.storevia.core.database.entity.BatchEntity
 import com.xcloak.storevia.core.database.entity.MovementType
 import com.xcloak.storevia.core.database.entity.StockMovementEntity
 import com.xcloak.storevia.core.money.Money
 import com.xcloak.storevia.core.util.Parsing
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
 import kotlinx.coroutines.launch
 import java.time.Instant
 import java.time.LocalDate
@@ -36,10 +41,18 @@ private val DATE_FMT = DateTimeFormatter.ofPattern("d MMM yyyy")
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ProductDetailScreen(onBack: () -> Unit, onEdit: (String) -> Unit, vm: ProductDetailViewModel = hiltViewModel()) {
+fun ProductDetailScreen(
+    onBack: () -> Unit,
+    onEdit: (String) -> Unit,
+    onAddVariant: (String) -> Unit,
+    onOpenVariant: (String) -> Unit,
+    vm: ProductDetailViewModel = hiltViewModel(),
+) {
     val ui by vm.ui.collectAsStateWithLifecycle()
     var showReceive by remember { mutableStateOf(false) }
     var adjusting by remember { mutableStateOf<BatchEntity?>(null) }
+    var showRecipeEditor by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
     val canAdjust = can(Permission.ADJUST_STOCK)
     val canEdit = can(Permission.MANAGE_PRODUCTS)
     val canReceive = can(Permission.MANAGE_PURCHASES)
@@ -47,15 +60,30 @@ fun ProductDetailScreen(onBack: () -> Unit, onEdit: (String) -> Unit, vm: Produc
 
     Column(Modifier.fillMaxSize()) {
         TopAppBar(
-            title = { Text(d?.product?.name.orEmpty(), maxLines = 1) },
+            title = {
+                Text(
+                    d?.let { listOfNotNull(it.product.name, it.product.variantLabel).joinToString(" · ") }.orEmpty(),
+                    maxLines = 1,
+                )
+            },
             navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.back)) } },
             actions = {
                 if (d != null && canEdit) IconButton(onClick = { onEdit(d.product.id) }) { Icon(Icons.Filled.Edit, stringResource(R.string.edit)) }
             },
         )
-        if (d == null) return@Column
+        if (d == null) {
+            LoadingState(Modifier.weight(1f).fillMaxWidth())
+            return@Column
+        }
 
         val symbol = d.unit?.symbol.orEmpty()
+        val attributes = remember(d.product.attributesJson) {
+            runCatching {
+                Json.parseToJsonElement(d.product.attributesJson).jsonObject.mapNotNull { (key, value) ->
+                    (value as? JsonPrimitive)?.contentOrNull?.takeIf(String::isNotBlank)?.let { key to it }
+                }
+            }.getOrDefault(emptyList())
+        }
         LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             item {
                 Text(stringResource(R.string.stock_on_hand), style = MaterialTheme.typography.labelLarge)
@@ -71,6 +99,117 @@ fun ProductDetailScreen(onBack: () -> Unit, onEdit: (String) -> Unit, vm: Produc
                 )
                 Spacer(Modifier.height(16.dp))
                 Text(stringResource(R.string.batches), style = MaterialTheme.typography.titleMedium)
+            }
+            if (attributes.isNotEmpty()) {
+                item {
+                    Card(Modifier.fillMaxWidth()) {
+                        Column(
+                            Modifier.fillMaxWidth().padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text(stringResource(R.string.product_type_details), style = MaterialTheme.typography.titleMedium)
+                            attributes.forEach { (key, value) ->
+                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                    Text(key.replace('_', ' '), Modifier.weight(1f), color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    Text(value, Modifier.weight(1f))
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if (d.product.parentProductId == null) {
+                item {
+                    Text(stringResource(R.string.product_variants_title), style = MaterialTheme.typography.titleMedium)
+                    if (d.variants.isEmpty()) {
+                        Text(stringResource(R.string.product_variants_empty), style = MaterialTheme.typography.bodyMedium)
+                    } else {
+                        d.variants.forEach { variant ->
+                            ListItem(
+                                modifier = Modifier.clickable { onOpenVariant(variant.id) },
+                                headlineContent = { Text(variant.variantLabel) },
+                                supportingContent = {
+                                    Text(
+                                        listOfNotNull(
+                                            variant.sku,
+                                            "${Parsing.milliToInput(variant.onHandMilli)} ${variant.unitSymbol.orEmpty()}",
+                                            Money(variant.sellPricePaise).format(),
+                                        )
+                                            .joinToString(" · "),
+                                    )
+                                },
+                            )
+                            HorizontalDivider()
+                        }
+                    }
+                    if (canEdit && !d.hasStockHistory) {
+                        TextButton(onClick = { onAddVariant(d.product.id) }) {
+                            Text(stringResource(R.string.product_add_variant))
+                        }
+                    }
+                    if (d.variants.isNotEmpty()) {
+                        Text(
+                            stringResource(R.string.product_variant_stock_separate),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+            if (canEdit || d.recipeComponents.isNotEmpty()) {
+                item {
+                    Card(Modifier.fillMaxWidth()) {
+                        Column(
+                            Modifier.fillMaxWidth().padding(16.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                            ) {
+                                Text(stringResource(R.string.recipe_bom_title), style = MaterialTheme.typography.titleMedium)
+                                if (canEdit) TextButton(onClick = { showRecipeEditor = true }) {
+                                    Text(stringResource(R.string.recipe_add_ingredient))
+                                }
+                            }
+                            if (d.recipeComponents.isEmpty()) {
+                                Text(stringResource(R.string.recipe_bom_empty), style = MaterialTheme.typography.bodyMedium)
+                            } else {
+                                Text(stringResource(R.string.recipe_bom_hint), style = MaterialTheme.typography.bodySmall)
+                                d.recipeComponents.forEach { component ->
+                                    Row(
+                                        Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(
+                                            "${component.ingredientName} · ${Parsing.milliToInput(component.quantityPerUnitMilli)} ${component.unitSymbol}",
+                                            Modifier.weight(1f),
+                                        )
+                                        if (canEdit) TextButton(onClick = {
+                                            scope.launch { vm.removeRecipeIngredient(component.id) }
+                                        }) { Text(stringResource(R.string.delete)) }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if (d.product.serialTracked) {
+                item {
+                    Text(stringResource(R.string.serial_inventory_title), style = MaterialTheme.typography.titleMedium)
+                    if (d.serialNumbers.isEmpty()) {
+                        Text(stringResource(R.string.serial_inventory_empty), style = MaterialTheme.typography.bodyMedium)
+                    } else {
+                        d.serialNumbers.forEach { serial ->
+                            ListItem(
+                                headlineContent = { Text(serial.serialNumber) },
+                                supportingContent = { Text(stringResource(R.string.serial_inventory_status, serial.status.name.lowercase())) },
+                            )
+                        }
+                    }
+                }
             }
             if (d.batches.isEmpty()) {
                 item { Text(stringResource(R.string.no_batches), style = MaterialTheme.typography.bodyMedium) }
@@ -88,13 +227,89 @@ fun ProductDetailScreen(onBack: () -> Unit, onEdit: (String) -> Unit, vm: Produc
                 items(d.movements, key = { it.id }) { MovementRow(it, symbol) }
             }
         }
-        if (canReceive) Button(onClick = { showReceive = true }, modifier = Modifier.fillMaxWidth().padding(16.dp).height(52.dp)) {
+        if (canReceive && d.variants.isEmpty() && d.recipeComponents.isEmpty()) Button(onClick = { showReceive = true }, modifier = Modifier.fillMaxWidth().padding(16.dp).height(52.dp)) {
             Text(stringResource(R.string.receive_stock))
         }
     }
 
     adjusting?.let { b -> AdjustDialog(vm, b, d?.unit?.symbol.orEmpty()) { adjusting = null } }
-    if (showReceive && d != null) ReceiveDialog(vm, d.product.trackExpiry, d.unit?.symbol.orEmpty(), d.product.costPaise) { showReceive = false }
+    if (showReceive && d != null) ReceiveDialog(
+        vm,
+        d.product.trackExpiry,
+        d.product.serialTracked,
+        d.unit?.symbol.orEmpty(),
+        d.product.costPaise,
+    ) { showReceive = false }
+    if (showRecipeEditor && d != null) RecipeComponentDialog(vm, d.product.id, d.recipeComponents, { showRecipeEditor = false })
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun RecipeComponentDialog(
+    vm: ProductDetailViewModel,
+    recipeProductId: String,
+    components: List<com.xcloak.storevia.core.database.dao.RecipeComponentRow>,
+    onDismiss: () -> Unit,
+) {
+    val products by vm.ingredientOptions.collectAsStateWithLifecycle()
+    var ingredientId by remember { mutableStateOf(products.firstOrNull { it.id != recipeProductId }?.id.orEmpty()) }
+    var quantity by remember { mutableStateOf("") }
+    var expanded by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<Int?>(null) }
+    val scope = rememberCoroutineScope()
+    val ingredient = products.firstOrNull { it.id == ingredientId }
+    val unitSymbol = vm.unitSymbol(ingredientId).orEmpty()
+    val available = products.filter { product ->
+        product.id != recipeProductId && components.none { it.ingredientProductId == product.id }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.recipe_add_ingredient)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                ExposedDropdownMenuBox(expanded = expanded, onExpandedChange = { expanded = it }) {
+                    OutlinedTextField(
+                        value = products.firstOrNull { it.id == ingredientId }?.name.orEmpty(),
+                        onValueChange = {},
+                        readOnly = true,
+                        label = { Text(stringResource(R.string.recipe_ingredient)) },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
+                        modifier = Modifier.fillMaxWidth().menuAnchor(),
+                    )
+                    ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                        available.forEach { option ->
+                            DropdownMenuItem(
+                                text = { Text(option.name) },
+                                onClick = { ingredientId = option.id; expanded = false },
+                            )
+                        }
+                    }
+                }
+                OutlinedTextField(
+                    value = quantity,
+                    onValueChange = { quantity = it; error = null },
+                    label = { Text(stringResource(R.string.recipe_quantity_per_unit)) },
+                    supportingText = { Text(stringResource(R.string.recipe_quantity_hint, unitSymbol)) },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                    singleLine = true,
+                )
+                error?.let { Text(stringResource(it), color = MaterialTheme.colorScheme.error) }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = ingredientId.isNotBlank() && quantity.isNotBlank(),
+                onClick = {
+                    scope.launch {
+                        val result = vm.saveRecipeIngredient(ingredientId, quantity)
+                        if (result == null) onDismiss() else error = result
+                    }
+                },
+            ) { Text(stringResource(R.string.save)) }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
+    )
 }
 
 @Composable
@@ -105,7 +320,7 @@ private fun BatchRow(b: BatchEntity, symbol: String, onClick: () -> Unit) {
     val color = when {
         days == null -> MaterialTheme.colorScheme.onSurfaceVariant
         days < 0 -> MaterialTheme.colorScheme.error
-        days <= 30 -> Color(0xFFB26A00)
+        days <= 30 -> MaterialTheme.colorScheme.tertiary
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
     ListItem(
@@ -128,10 +343,18 @@ private fun BatchRow(b: BatchEntity, symbol: String, onClick: () -> Unit) {
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ReceiveDialog(vm: ProductDetailViewModel, trackExpiry: Boolean, symbol: String, defaultCost: Long, onDismiss: () -> Unit) {
+private fun ReceiveDialog(
+    vm: ProductDetailViewModel,
+    trackExpiry: Boolean,
+    serialTracked: Boolean,
+    symbol: String,
+    defaultCost: Long,
+    onDismiss: () -> Unit,
+) {
     var qty by remember { mutableStateOf("") }
     var cost by remember { mutableStateOf(Parsing.paiseToInput(defaultCost)) }
     var batchNo by remember { mutableStateOf("") }
+    var serialNumbers by remember { mutableStateOf("") }
     var expiry by remember { mutableStateOf<LocalDate?>(null) }
     var error by remember { mutableStateOf<Int?>(null) }
     var picking by remember { mutableStateOf(false) }
@@ -149,6 +372,15 @@ private fun ReceiveDialog(vm: ProductDetailViewModel, trackExpiry: Boolean, symb
                     label = { Text(stringResource(R.string.field_cost)) },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
                 OutlinedTextField(batchNo, { batchNo = it }, singleLine = true, label = { Text(stringResource(R.string.field_batch_no)) })
+                if (serialTracked) {
+                    OutlinedTextField(
+                        value = serialNumbers,
+                        onValueChange = { serialNumbers = it; error = null },
+                        minLines = 2,
+                        label = { Text(stringResource(R.string.product_serial_numbers)) },
+                        supportingText = { Text(stringResource(R.string.serial_numbers_entry_hint)) },
+                    )
+                }
                 OutlinedButton(onClick = { picking = true }, modifier = Modifier.fillMaxWidth()) {
                     Text(expiry?.format(DATE_FMT) ?: stringResource(if (trackExpiry) R.string.field_expiry else R.string.pick_date))
                 }
@@ -158,7 +390,7 @@ private fun ReceiveDialog(vm: ProductDetailViewModel, trackExpiry: Boolean, symb
         confirmButton = {
             TextButton(onClick = {
                 scope.launch {
-                    val e = vm.receive(qty, cost, batchNo, expiry)
+                    val e = vm.receive(qty, cost, batchNo, expiry, serialNumbers)
                     if (e == null) onDismiss() else error = e
                 }
             }) { Text(stringResource(R.string.save)) }

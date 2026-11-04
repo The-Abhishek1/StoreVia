@@ -20,6 +20,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xcloak.storevia.R
 import com.xcloak.storevia.core.access.Permission
 import com.xcloak.storevia.core.ui.can
+import com.xcloak.storevia.core.ui.LoadingState
 import com.xcloak.storevia.core.database.dao.ProductListRow
 import com.xcloak.storevia.core.money.Money
 import com.xcloak.storevia.core.util.Parsing
@@ -67,7 +68,7 @@ fun StockListScreen(
             }
             val list = rows
             when {
-                list == null -> Unit
+                list == null -> LoadingState(Modifier.weight(1f).fillMaxWidth())
                 list.isEmpty() -> EmptyState(query.trim(), can(Permission.MANAGE_PRODUCTS), onAddWithBarcode)
                 else -> LazyColumn(
                     contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 112.dp),
@@ -84,7 +85,12 @@ fun StockListScreen(
 private fun ProductRow(row: ProductListRow, onClick: () -> Unit) {
     Card(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
         ListItem(
-            headlineContent = { Text(row.name, style = MaterialTheme.typography.titleMedium) },
+            headlineContent = {
+                Text(
+                    listOfNotNull(row.name, row.variantLabel).joinToString(" · "),
+                    style = MaterialTheme.typography.titleMedium,
+                )
+            },
             supportingContent = {
                 Text(
                     stringResource(

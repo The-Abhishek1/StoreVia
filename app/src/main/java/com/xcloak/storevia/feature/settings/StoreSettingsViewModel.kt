@@ -15,7 +15,9 @@ import javax.inject.Inject
 
 data class StoreForm(
     val name: String = "",
+    val ownerName: String = "",
     val address: String = "",
+    val city: String = "",
     val phone: String = "",
     val gstin: String = "",
     val stateCode: String = "29",
@@ -52,7 +54,8 @@ class StoreSettingsViewModel @Inject constructor(
             _ui.value = StoreSettingsUi(
                 loaded = true,
                 form = StoreForm(
-                    name = if (s.name == DEFAULT_NAME) "" else s.name, address = s.address, phone = s.phone,
+                    name = if (s.name == DEFAULT_NAME) "" else s.name, ownerName = s.ownerName,
+                    address = s.address, city = s.city, phone = s.phone,
                     gstin = s.gstin.orEmpty(), stateCode = s.stateCode, invoicePrefix = s.invoicePrefix,
                     nextInvoiceNo = s.nextInvoiceNo.toString(), allowNegativeStock = s.allowNegativeStock,
                 ),
@@ -63,13 +66,37 @@ class StoreSettingsViewModel @Inject constructor(
 
     fun update(block: StoreForm.() -> StoreForm) = _ui.update { it.copy(form = it.form.block(), errors = emptyMap()) }
 
-    fun save() {
+    fun clearCloudRegistrationDetails() = _ui.update {
+        it.copy(
+            form = it.form.copy(
+                name = "",
+                ownerName = "",
+                address = "",
+                city = "",
+                phone = "",
+                gstin = "",
+                stateCode = "",
+            ),
+            errors = emptyMap(),
+        )
+    }
+
+    fun save() = save(requireRegistrationDetails = false)
+
+    fun save(requireRegistrationDetails: Boolean, setupFlow: Boolean = false) {
         val f = _ui.value.form
         val base = original ?: return
-        if (!access.actor().can(Permission.MANAGE_SETTINGS)) { _ui.update { it.copy(errors = mapOf("name" to R.string.err_permission_denied)) }; return }
+        if (!setupFlow && !access.actor().can(Permission.MANAGE_SETTINGS)) { _ui.update { it.copy(errors = mapOf("name" to R.string.err_permission_denied)) }; return }
         val errors = mutableMapOf<String, Int>()
 
-        if (f.name.isBlank()) errors["name"] = R.string.err_name_required
+        if (f.name.isBlank()) errors["name"] = R.string.err_store_name_required
+        if (requireRegistrationDetails) {
+            if (f.ownerName.isBlank()) errors["ownerName"] = R.string.err_required
+            if (f.address.isBlank()) errors["address"] = R.string.err_required
+            if (f.city.isBlank()) errors["city"] = R.string.err_required
+            if (!f.phone.trim().matches(Regex("^\\+?[0-9]{10,15}$"))) errors["phone"] = R.string.err_phone_invalid
+            if (f.stateCode.isBlank()) errors["stateCode"] = R.string.err_required
+        }
         val prefix = f.invoicePrefix.trim().uppercase()
         if (prefix.isEmpty() || prefix.length > 8 || !prefix.all { it.isLetterOrDigit() || it == '-' }) errors["prefix"] = R.string.err_prefix_invalid
         val next = f.nextInvoiceNo.trim().toLongOrNull()
@@ -87,7 +114,8 @@ class StoreSettingsViewModel @Inject constructor(
         viewModelScope.launch {
             storeDao.upsert(
                 base.copy(
-                    name = f.name.trim(), address = f.address.trim(), phone = f.phone.trim(), gstin = gstin,
+                    name = f.name.trim(), ownerName = f.ownerName.trim(), address = f.address.trim(),
+                    city = f.city.trim(), phone = f.phone.trim(), gstin = gstin,
                     stateCode = f.stateCode, invoicePrefix = prefix, nextInvoiceNo = next!!,
                     allowNegativeStock = f.allowNegativeStock, updatedAt = System.currentTimeMillis(), dirty = true,
                 )

@@ -104,4 +104,20 @@ class PurchaseUseCasesTest {
         val left = db.batchDao().observeForProduct(tracked.id).first().associate { it.batchNo to it.qtyOnHandMilli }
         assertEquals(mapOf<String?, Long>("LATE" to 2_000L), left)       // EARLY used up, 1 piece taken from LATE
     }
+
+    @Test fun serialTrackedPurchaseRequiresOneUniqueSerialPerUnit() = runBlocking {
+        val device = ProductEntity(name = "Phone", unitId = product.unitId, sellPricePaise = 20_000, serialTracked = true)
+        db.productDao().insert(device)
+        val id = buy(PurchaseItem(device.id, 2_000, 15_000, serialNumbers = listOf("IMEI-1", "IMEI-2")))
+        val batch = db.batchDao().observeForProduct(device.id).first().single()
+        assertEquals(2, db.serialNumberDao().availableForBatch(device.id, batch.id).size)
+
+        try {
+            buy(PurchaseItem(device.id, 2_000, 15_000, serialNumbers = listOf("IMEI-3")))
+            fail("expected PurchaseException")
+        } catch (e: PurchaseException) {
+            assertEquals(PurchaseException.Reason.SERIAL_COUNT, e.reason)
+        }
+        assertEquals(2_000L, db.stockMovementDao().ledgerTotal(device.id))
+    }
 }

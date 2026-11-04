@@ -16,6 +16,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xcloak.storevia.R
 import com.xcloak.storevia.core.access.AuditAction
+import com.xcloak.storevia.core.ui.LoadingState
 import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
@@ -39,7 +40,7 @@ fun AuditScreen(onBack: () -> Unit, vm: AuditViewModel = hiltViewModel()) {
     ) { padding ->
         val list = rows
         when {
-            list == null -> Unit
+            list == null -> LoadingState(Modifier.padding(padding))
             list.isEmpty() -> Column(Modifier.padding(padding).fillMaxSize().padding(32.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(stringResource(R.string.audit_empty), style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(8.dp))

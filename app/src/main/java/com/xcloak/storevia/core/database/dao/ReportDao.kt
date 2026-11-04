@@ -25,20 +25,99 @@ data class ReorderRow(
  */
 @Dao
 interface ReportDao {
-    @Query("""SELECT COALESCE(SUM(totalPaise), 0) AS grossPaise, COUNT(*) AS bills, COALESCE(SUM(discountPaise), 0) AS discountPaise
-              FROM sales WHERE status != 'CANCELLED' AND createdAt >= :from AND createdAt < :to""")
-    fun sales(from: Long, to: Long): Flow<SalesAgg>
+    @Query("""SELECT COALESCE(SUM(
+                       CASE WHEN :productId IS NULL AND :categoryId IS NULL AND :taxRateBp IS NULL AND :supplierId IS NULL THEN s.totalPaise
+                            ELSE COALESCE((SELECT SUM(sl.lineTotalPaise) FROM sale_lines sl
+                                           JOIN products fp ON fp.id = sl.productId
+                                           WHERE sl.saleId = s.id
+                                             AND (:productId IS NULL OR sl.productId = :productId)
+                                             AND (:categoryId IS NULL OR fp.categoryId = :categoryId)
+                                             AND (:taxRateBp IS NULL OR sl.gstRateBp = :taxRateBp)
+                                             AND (:supplierId IS NULL OR EXISTS
+                                                  (SELECT 1 FROM purchase_lines pl JOIN purchases pu ON pu.id = pl.purchaseId
+                                                   WHERE pl.productId = sl.productId AND pu.supplierId = :supplierId))), 0)
+                       END), 0) AS grossPaise,
+                     COUNT(*) AS bills,
+                     COALESCE(SUM(
+                       CASE WHEN :productId IS NULL AND :categoryId IS NULL AND :taxRateBp IS NULL AND :supplierId IS NULL THEN s.discountPaise
+                            ELSE COALESCE((SELECT SUM(sl.discountPaise) FROM sale_lines sl
+                                           JOIN products fp ON fp.id = sl.productId
+                                           WHERE sl.saleId = s.id
+                                             AND (:productId IS NULL OR sl.productId = :productId)
+                                             AND (:categoryId IS NULL OR fp.categoryId = :categoryId)
+                                             AND (:taxRateBp IS NULL OR sl.gstRateBp = :taxRateBp)
+                                             AND (:supplierId IS NULL OR EXISTS
+                                                  (SELECT 1 FROM purchase_lines pl JOIN purchases pu ON pu.id = pl.purchaseId
+                                                   WHERE pl.productId = sl.productId AND pu.supplierId = :supplierId))), 0)
+                       END), 0) AS discountPaise
+              FROM sales s WHERE s.status != 'CANCELLED' AND s.createdAt >= :from AND s.createdAt < :to
+                AND (:customerId IS NULL OR s.customerId = :customerId)
+                AND ((:productId IS NULL AND :categoryId IS NULL AND :taxRateBp IS NULL AND :supplierId IS NULL) OR EXISTS
+                     (SELECT 1 FROM sale_lines sl JOIN products fp ON fp.id = sl.productId
+                      WHERE sl.saleId = s.id
+                        AND (:productId IS NULL OR sl.productId = :productId)
+                        AND (:categoryId IS NULL OR fp.categoryId = :categoryId)
+                        AND (:taxRateBp IS NULL OR sl.gstRateBp = :taxRateBp)
+                        AND (:supplierId IS NULL OR EXISTS
+                             (SELECT 1 FROM purchase_lines pl JOIN purchases pu ON pu.id = pl.purchaseId
+                              WHERE pl.productId = sl.productId AND pu.supplierId = :supplierId)))
+                    )
+                AND (:method IS NULL OR EXISTS (SELECT 1 FROM payments p WHERE p.saleId = s.id AND p.method = :method))""")
+    fun sales(
+        from: Long, to: Long, method: String? = null, productId: String? = null, categoryId: String? = null,
+        customerId: String? = null, taxRateBp: Int? = null, supplierId: String? = null,
+    ): Flow<SalesAgg>
 
     @Query("""SELECT COALESCE(SUM(sl.taxableValuePaise), 0) AS taxablePaise,
                      COALESCE(SUM(sl.qtyMilli * sl.costSnapshotPaise / 1000), 0) AS costPaise,
                      COALESCE(SUM(sl.cgstPaise + sl.sgstPaise + sl.igstPaise), 0) AS taxPaise
               FROM sale_lines sl JOIN sales s ON s.id = sl.saleId
-              WHERE s.status != 'CANCELLED' AND s.createdAt >= :from AND s.createdAt < :to""")
-    fun lines(from: Long, to: Long): Flow<LineAgg>
+              JOIN products p ON p.id = sl.productId
+              WHERE s.status != 'CANCELLED' AND s.createdAt >= :from AND s.createdAt < :to
+                AND (:productId IS NULL OR sl.productId = :productId)
+                AND (:categoryId IS NULL OR p.categoryId = :categoryId)
+                AND (:customerId IS NULL OR s.customerId = :customerId)
+                AND (:taxRateBp IS NULL OR sl.gstRateBp = :taxRateBp)
+                AND (:supplierId IS NULL OR EXISTS
+                     (SELECT 1 FROM purchase_lines pl JOIN purchases pu ON pu.id = pl.purchaseId
+                      WHERE pl.productId = sl.productId AND pu.supplierId = :supplierId))
+                AND (:method IS NULL OR EXISTS (SELECT 1 FROM payments p WHERE p.saleId = s.id AND p.method = :method))""")
+    fun lines(
+        from: Long, to: Long, method: String? = null, productId: String? = null, categoryId: String? = null,
+        customerId: String? = null, taxRateBp: Int? = null, supplierId: String? = null,
+    ): Flow<LineAgg>
 
-    @Query("""SELECT COALESCE(SUM(r.totalPaise), 0) FROM sale_returns r JOIN sales s ON s.id = r.saleId
-              WHERE s.status != 'CANCELLED' AND r.createdAt >= :from AND r.createdAt < :to""")
-    fun returnsTotal(from: Long, to: Long): Flow<Long>
+    @Query("""SELECT COALESCE(SUM(
+                       CASE WHEN :productId IS NULL AND :categoryId IS NULL AND :taxRateBp IS NULL AND :supplierId IS NULL THEN r.totalPaise
+                            ELSE COALESCE((SELECT SUM(rl.amountPaise) FROM sale_return_lines rl
+                                           JOIN sale_lines sl ON sl.id = rl.saleLineId
+                                           JOIN products fp ON fp.id = sl.productId
+                                           WHERE rl.returnId = r.id
+                                             AND (:productId IS NULL OR sl.productId = :productId)
+                                             AND (:categoryId IS NULL OR fp.categoryId = :categoryId)
+                                             AND (:taxRateBp IS NULL OR sl.gstRateBp = :taxRateBp)
+                                             AND (:supplierId IS NULL OR EXISTS
+                                                  (SELECT 1 FROM purchase_lines pl JOIN purchases pu ON pu.id = pl.purchaseId
+                                                   WHERE pl.productId = sl.productId AND pu.supplierId = :supplierId))), 0)
+                       END), 0)
+              FROM sale_returns r JOIN sales s ON s.id = r.saleId
+              WHERE s.status != 'CANCELLED' AND r.createdAt >= :from AND r.createdAt < :to
+                AND (:customerId IS NULL OR s.customerId = :customerId)
+                AND ((:productId IS NULL AND :categoryId IS NULL AND :taxRateBp IS NULL AND :supplierId IS NULL) OR EXISTS
+                     (SELECT 1 FROM sale_return_lines rl
+                      JOIN sale_lines sl ON sl.id = rl.saleLineId JOIN products fp ON fp.id = sl.productId
+                      WHERE rl.returnId = r.id
+                        AND (:productId IS NULL OR sl.productId = :productId)
+                        AND (:categoryId IS NULL OR fp.categoryId = :categoryId)
+                        AND (:taxRateBp IS NULL OR sl.gstRateBp = :taxRateBp)
+                        AND (:supplierId IS NULL OR EXISTS
+                             (SELECT 1 FROM purchase_lines pl JOIN purchases pu ON pu.id = pl.purchaseId
+                              WHERE pl.productId = sl.productId AND pu.supplierId = :supplierId))))
+                AND (:method IS NULL OR EXISTS (SELECT 1 FROM payments p WHERE p.saleId = s.id AND p.method = :method))""")
+    fun returnsTotal(
+        from: Long, to: Long, method: String? = null, productId: String? = null, categoryId: String? = null,
+        customerId: String? = null, taxRateBp: Int? = null, supplierId: String? = null,
+    ): Flow<Long>
 
     @Query("""SELECT COALESCE(SUM(rl.amountPaise * sl.taxableValuePaise / sl.lineTotalPaise), 0) AS taxablePaise,
                      COALESCE(SUM(rl.qtyMilli * rl.costSnapshotPaise / 1000), 0) AS costPaise
@@ -46,13 +125,41 @@ interface ReportDao {
               JOIN sale_returns r ON r.id = rl.returnId
               JOIN sale_lines sl ON sl.id = rl.saleLineId
               JOIN sales s ON s.id = r.saleId
-              WHERE s.status != 'CANCELLED' AND r.createdAt >= :from AND r.createdAt < :to AND sl.lineTotalPaise > 0""")
-    fun returnLines(from: Long, to: Long): Flow<ReturnLineAgg>
+              JOIN products p ON p.id = sl.productId
+              WHERE s.status != 'CANCELLED' AND r.createdAt >= :from AND r.createdAt < :to AND sl.lineTotalPaise > 0
+                AND (:productId IS NULL OR sl.productId = :productId)
+                AND (:categoryId IS NULL OR p.categoryId = :categoryId)
+                AND (:customerId IS NULL OR s.customerId = :customerId)
+                AND (:taxRateBp IS NULL OR sl.gstRateBp = :taxRateBp)
+                AND (:supplierId IS NULL OR EXISTS
+                     (SELECT 1 FROM purchase_lines pl JOIN purchases pu ON pu.id = pl.purchaseId
+                      WHERE pl.productId = sl.productId AND pu.supplierId = :supplierId))
+                AND (:method IS NULL OR EXISTS (SELECT 1 FROM payments p WHERE p.saleId = s.id AND p.method = :method))""")
+    fun returnLines(
+        from: Long, to: Long, method: String? = null, productId: String? = null, categoryId: String? = null,
+        customerId: String? = null, taxRateBp: Int? = null, supplierId: String? = null,
+    ): Flow<ReturnLineAgg>
 
     /** Money in/out by method, refunds included as negatives. */
-    @Query("""SELECT method AS method, SUM(amountPaise) AS totalPaise FROM payments
-              WHERE createdAt >= :from AND createdAt < :to GROUP BY method ORDER BY totalPaise DESC""")
-    fun paymentsByMethod(from: Long, to: Long): Flow<List<PaymentTotalRow>>
+    @Query("""SELECT p.method AS method, SUM(p.amountPaise) AS totalPaise FROM payments p
+              JOIN sales s ON s.id = p.saleId
+              WHERE s.status != 'CANCELLED' AND s.createdAt >= :from AND s.createdAt < :to
+                AND (:method IS NULL OR p.method = :method)
+                AND (:customerId IS NULL OR s.customerId = :customerId)
+                AND ((:productId IS NULL AND :categoryId IS NULL AND :taxRateBp IS NULL AND :supplierId IS NULL) OR EXISTS
+                     (SELECT 1 FROM sale_lines sl JOIN products fp ON fp.id = sl.productId
+                      WHERE sl.saleId = s.id
+                        AND (:productId IS NULL OR sl.productId = :productId)
+                        AND (:categoryId IS NULL OR fp.categoryId = :categoryId)
+                        AND (:taxRateBp IS NULL OR sl.gstRateBp = :taxRateBp)
+                        AND (:supplierId IS NULL OR EXISTS
+                             (SELECT 1 FROM purchase_lines pl JOIN purchases pu ON pu.id = pl.purchaseId
+                              WHERE pl.productId = sl.productId AND pu.supplierId = :supplierId))))
+              GROUP BY p.method ORDER BY totalPaise DESC""")
+    fun paymentsByMethod(
+        from: Long, to: Long, method: String? = null, productId: String? = null, categoryId: String? = null,
+        customerId: String? = null, taxRateBp: Int? = null, supplierId: String? = null,
+    ): Flow<List<PaymentTotalRow>>
 
     @Query("""SELECT sl.productId AS productId, MAX(sl.nameSnapshot) AS name, COALESCE(MAX(u.symbol), '') AS unitSymbol,
                      SUM(sl.qtyMilli) AS qtyMilli, SUM(sl.lineTotalPaise) AS revenuePaise
@@ -61,8 +168,24 @@ interface ReportDao {
               LEFT JOIN products p ON p.id = sl.productId
               LEFT JOIN units u ON u.id = p.unitId
               WHERE s.status != 'CANCELLED' AND s.createdAt >= :from AND s.createdAt < :to
+                AND (:productId IS NULL OR sl.productId = :productId)
+                AND (:categoryId IS NULL OR p.categoryId = :categoryId)
+                AND (:customerId IS NULL OR s.customerId = :customerId)
+                AND (:taxRateBp IS NULL OR sl.gstRateBp = :taxRateBp)
+                AND (:supplierId IS NULL OR EXISTS
+                     (SELECT 1 FROM purchase_lines pl JOIN purchases pu ON pu.id = pl.purchaseId
+                      WHERE pl.productId = sl.productId AND pu.supplierId = :supplierId))
+                AND (:method IS NULL OR EXISTS (SELECT 1 FROM payments p WHERE p.saleId = s.id AND p.method = :method))
               GROUP BY sl.productId ORDER BY revenuePaise DESC LIMIT :limit""")
-    fun topProducts(from: Long, to: Long, limit: Int): Flow<List<TopProductRow>>
+    fun topProducts(
+        from: Long, to: Long, limit: Int, method: String? = null, productId: String? = null,
+        categoryId: String? = null, customerId: String? = null, taxRateBp: Int? = null, supplierId: String? = null,
+    ): Flow<List<TopProductRow>>
+
+    @Query("""SELECT COALESCE(SUM(totalPaise), 0) FROM purchases
+              WHERE purchaseDate >= :from AND purchaseDate < :to
+                AND (:supplierId IS NULL OR supplierId = :supplierId)""")
+    fun purchaseSpend(from: Long, to: Long, supplierId: String?): Flow<Long>
 
     @Query("""SELECT COALESCE(SUM(b.qtyOnHandMilli * b.costPaise / 1000), 0) AS costPaise,
                      COALESCE(SUM(b.qtyOnHandMilli * p.sellPricePaise / 1000), 0) AS retailPaise

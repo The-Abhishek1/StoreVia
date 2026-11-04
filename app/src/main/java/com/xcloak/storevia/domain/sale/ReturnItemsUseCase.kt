@@ -7,6 +7,7 @@ import com.xcloak.storevia.core.database.StorviaDatabase
 import com.xcloak.storevia.core.database.dao.BatchDao
 import com.xcloak.storevia.core.database.dao.CustomerDao
 import com.xcloak.storevia.core.database.dao.SaleDao
+import com.xcloak.storevia.core.database.dao.SerialNumberDao
 import com.xcloak.storevia.core.database.dao.StockMovementDao
 import com.xcloak.storevia.core.database.entity.*
 import com.xcloak.storevia.core.money.Rounding
@@ -31,7 +32,7 @@ data class ReturnPreview(
 )
 
 class ReturnException(val reason: Reason) : Exception(reason.name) {
-    enum class Reason { NOTHING_TO_RETURN, EXCEEDS_RETURNABLE, SALE_NOT_FOUND, SALE_CANCELLED, CREDIT_NEEDS_CUSTOMER }
+    enum class Reason { NOTHING_TO_RETURN, EXCEEDS_RETURNABLE, SALE_NOT_FOUND, SALE_CANCELLED, CREDIT_NEEDS_CUSTOMER, SERIAL_STATE }
 }
 
 /**
@@ -49,6 +50,7 @@ class ReturnItemsUseCase @Inject constructor(
     private val customerDao: CustomerDao,
     private val access: Access = OwnerAccess,
     private val audit: AuditSink = NoAudit,
+    private val serialNumberDao: SerialNumberDao = db.serialNumberDao(),
 ) {
     private class Piece(val line: SaleLineEntity, val qtyMilli: Long, val amountPaise: Long)
     private class Computed(val sale: SaleEntity, val lines: List<SaleLineEntity>, val pieces: List<Piece>, val preview: ReturnPreview)
@@ -71,17 +73,67 @@ class ReturnItemsUseCase @Inject constructor(
             throw ReturnException(ReturnException.Reason.CREDIT_NEEDS_CUSTOMER)
 
         val returnId = java.util.UUID.randomUUID().toString()
+        val recipeConsumptions = stockDao.recipeConsumptions(saleId)
 
         for (p in c.pieces) {
             saleDao.addReturned(p.line.id, p.qtyMilli, p.amountPaise)
-            p.line.batchId?.let { batchDao.adjustQty(it, p.qtyMilli, now) }
-            stockDao.insert(
-                StockMovementEntity(
-                    productId = p.line.productId, batchId = p.line.batchId, type = MovementType.SALE_RETURN,
-                    qtyMilli = p.qtyMilli, unitCostPaise = p.line.costSnapshotPaise,
-                    refType = "RETURN", refId = returnId, createdAt = now,
+            val componentMovements = recipeConsumptions.filter { it.reason == p.line.id }
+            if (componentMovements.isEmpty()) {
+                val product = db.productDao().getById(p.line.productId)
+                if (product?.serialTracked == true) {
+                    if (p.qtyMilli % 1_000L != 0L) throw ReturnException(ReturnException.Reason.SERIAL_STATE)
+                    val soldSerials = serialNumberDao.soldForSaleLine(p.line.id)
+                    val requiredSerials = p.qtyMilli / 1_000L
+                    if (soldSerials.size.toLong() < requiredSerials) {
+                        throw ReturnException(ReturnException.Reason.SERIAL_STATE)
+                    }
+                    soldSerials.take(requiredSerials.toInt()).forEach { serial ->
+                        if (serialNumberDao.markAvailable(serial.id, now) != 1) {
+                            throw ReturnException(ReturnException.Reason.SERIAL_STATE)
+                        }
+                    }
+                }
+                p.line.batchId?.let { batchDao.adjustQty(it, p.qtyMilli, now) }
+                stockDao.insert(
+                    StockMovementEntity(
+                        productId = p.line.productId, branchId = sale.branchId, batchId = p.line.batchId, type = MovementType.SALE_RETURN,
+                        qtyMilli = p.qtyMilli, unitCostPaise = p.line.costSnapshotPaise,
+                        refType = "RETURN", refId = returnId, createdAt = now,
+                    )
                 )
-            )
+            } else {
+                val cumulativeReturnedMilli = p.line.returnedQtyMilli + p.qtyMilli
+                componentMovements.forEach { source ->
+                    val consumedMilli = -source.qtyMilli
+                    val targetReturnMilli = if (cumulativeReturnedMilli >= p.line.qtyMilli) {
+                        consumedMilli
+                    } else {
+                        (java.math.BigInteger.valueOf(consumedMilli)
+                            .multiply(java.math.BigInteger.valueOf(cumulativeReturnedMilli))
+                            .add(java.math.BigInteger.valueOf(p.line.qtyMilli / 2))
+                            .divide(java.math.BigInteger.valueOf(p.line.qtyMilli))).longValueExact()
+                    }
+                    val returnedAlready = stockDao.recipeReturnQty(source.id)
+                    val restore = (targetReturnMilli - returnedAlready).coerceAtLeast(0)
+                    if (restore > 0) {
+                        source.batchId?.let { batchDao.adjustQty(it, restore, now) }
+                        stockDao.insert(
+                            StockMovementEntity(
+                                productId = source.productId,
+                                branchId = source.branchId,
+                                batchId = source.batchId,
+                                type = MovementType.SALE_RETURN,
+                                qtyMilli = restore,
+                                unitCostPaise = source.unitCostPaise,
+                                refType = "RECIPE_RETURN",
+                                refId = returnId,
+                                reason = source.id,
+                                createdAt = now,
+                            ),
+                        )
+                    }
+                }
+            }
         }
 
         val refundMethod = (refund as? RefundMode.Money)?.method

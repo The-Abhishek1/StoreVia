@@ -11,6 +11,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Remove
 import androidx.compose.material3.*
@@ -27,6 +28,7 @@ import com.xcloak.storevia.R
 import com.xcloak.storevia.core.access.Permission
 import com.xcloak.storevia.core.ui.can
 import com.xcloak.storevia.core.database.dao.ProductListRow
+import com.xcloak.storevia.core.database.entity.BatchEntity
 import com.xcloak.storevia.core.database.entity.CustomerEntity
 import com.xcloak.storevia.core.database.entity.HeldCartEntity
 import com.xcloak.storevia.core.database.entity.PaymentMethod
@@ -39,6 +41,7 @@ import com.xcloak.storevia.feature.stock.FieldError
 fun CheckoutScreen(
     onBack: () -> Unit,
     onScan: () -> Unit,
+    onCreateProduct: (String) -> Unit,
     onCompleted: (String) -> Unit,
     vm: CheckoutViewModel = hiltViewModel(),
 ) {
@@ -50,6 +53,7 @@ fun CheckoutScreen(
     val canDiscount = can(Permission.APPLY_DISCOUNT)
     val canPrice = can(Permission.OVERRIDE_PRICE)
     val canCredit = can(Permission.SELL_ON_CREDIT)
+    val canOverrideBatch = can(Permission.OVERRIDE_BATCH)
     var qtyFor by remember { mutableStateOf<CartLine?>(null) }
     var discountFor by remember { mutableStateOf<CartLine?>(null) }
     var priceFor by remember { mutableStateOf<CartLine?>(null) }
@@ -57,7 +61,14 @@ fun CheckoutScreen(
     var billDiscount by remember { mutableStateOf(false) }
     var showHeld by remember { mutableStateOf(false) }
 
-    LaunchedEffect(Unit) { vm.events.collect { if (it is CheckoutEvent.Completed) onCompleted(it.saleId) } }
+    LaunchedEffect(Unit) {
+        vm.events.collect {
+            when (it) {
+                is CheckoutEvent.Completed -> onCompleted(it.saleId)
+                is CheckoutEvent.CreateProductForBarcode -> onCreateProduct(it.barcode)
+            }
+        }
+    }
 
     Column(Modifier.fillMaxSize().imePadding()) {
         TopAppBar(
@@ -85,7 +96,10 @@ fun CheckoutScreen(
                             line,
                             onMinus = { vm.step(line.productId, -1) }, onPlus = { vm.step(line.productId, 1) },
                             onQty = { qtyFor = line }, onPrice = { priceFor = line }, onDiscount = { discountFor = line },
-                            onRemove = { vm.remove(line.productId) }, canPrice = canPrice, canDiscount = canDiscount,
+                            onRemove = { vm.remove(line.productId) },
+                            onUnit = { usePack -> vm.usePackUnit(line.productId, usePack) },
+                            onBatch = { vm.openBatchPicker(line.productId) },
+                            canPrice = canPrice, canDiscount = canDiscount, canOverrideBatch = canOverrideBatch,
                         )
                     }
                 }
@@ -96,7 +110,7 @@ fun CheckoutScreen(
     }
 
     qtyFor?.let { l ->
-        NumberDialog(stringResource(R.string.edit_quantity), stringResource(R.string.field_qty), Parsing.milliToInput(l.qtyMilli), l.unitSymbol,
+        NumberDialog(stringResource(R.string.edit_quantity), stringResource(R.string.field_qty), Parsing.milliToInput(l.displayQtyMilli), l.unitSymbol,
             onConfirm = { vm.setQty(l.productId, it); qtyFor = null }, onDismiss = { qtyFor = null })
     }
     priceFor?.let { l ->
@@ -115,6 +129,35 @@ fun CheckoutScreen(
     }
     if (showHeld) HeldDialog(held, onResume = { vm.resume(it); showHeld = false }, onDelete = vm::deleteHeld, onDismiss = { showHeld = false })
     LaunchedEffect(held.isEmpty()) { if (held.isEmpty()) showHeld = false }
+    ui.batchPickerProductId?.let { productId ->
+        ui.cart.firstOrNull { it.productId == productId }?.let { line ->
+            BatchPicker(
+                batches = ui.batchOptions[productId].orEmpty(),
+                symbol = line.baseUnitSymbol,
+                selectedBatchId = line.preferredBatchId,
+                onSelect = { vm.selectBatch(productId, it) },
+                onDismiss = vm::dismissBatchPicker,
+            )
+        }
+    }
+
+    ui.unknownBarcode?.let { barcode ->
+        AlertDialog(
+            onDismissRequest = vm::dismissUnknownBarcode,
+            title = { Text(stringResource(R.string.barcode_product_not_found_title)) },
+            text = { Text(stringResource(R.string.barcode_product_not_found_body, barcode)) },
+            confirmButton = {
+                TextButton(onClick = vm::createProductForUnknownBarcode) {
+                    Text(stringResource(R.string.barcode_create_product))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = vm::dismissUnknownBarcode) {
+                    Text(stringResource(R.string.cancel))
+                }
+            },
+        )
+    }
 }
 
 @Composable
@@ -144,8 +187,9 @@ private fun CenterText(title: Int, hint: Int?) {
 
 @Composable
 private fun CartLineCard(
-    line: CartLine, onMinus: () -> Unit, onPlus: () -> Unit, onQty: () -> Unit, onPrice: () -> Unit, onDiscount: () -> Unit, onRemove: () -> Unit,
-    canPrice: Boolean, canDiscount: Boolean,
+    line: CartLine, onMinus: () -> Unit, onPlus: () -> Unit, onQty: () -> Unit, onPrice: () -> Unit, onDiscount: () -> Unit,
+    onRemove: () -> Unit, onUnit: (Boolean) -> Unit, onBatch: () -> Unit,
+    canPrice: Boolean, canDiscount: Boolean, canOverrideBatch: Boolean,
 ) {
     OutlinedCard(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp)) {
@@ -154,7 +198,7 @@ private fun CartLineCard(
                     Text(line.name, style = MaterialTheme.typography.titleMedium)
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text(
-                            stringResource(R.string.line_price_qty, Money(line.unitPricePaise).format(), Parsing.milliToInput(line.qtyMilli), line.unitSymbol),
+                            stringResource(R.string.line_price_qty, Money(line.unitPricePaise).format(), Parsing.milliToInput(line.qtyMilli), line.baseUnitSymbol),
                             style = MaterialTheme.typography.bodySmall, modifier = if (canPrice) Modifier.clickable(onClick = onPrice) else Modifier,
                         )
                         if (line.unitPricePaise != line.listPricePaise) {
@@ -169,7 +213,7 @@ private fun CartLineCard(
             }
             Row(verticalAlignment = Alignment.CenterVertically) {
                 FilledTonalIconButton(onClick = onMinus) { Icon(Icons.Filled.Remove, null) }
-                TextButton(onClick = onQty) { Text("${Parsing.milliToInput(line.qtyMilli)} ${line.unitSymbol}", style = MaterialTheme.typography.titleMedium) }
+                TextButton(onClick = onQty) { Text("${Parsing.milliToInput(line.displayQtyMilli)} ${line.unitSymbol}", style = MaterialTheme.typography.titleMedium) }
                 FilledTonalIconButton(onClick = onPlus) { Icon(Icons.Filled.Add, null) }
                 Spacer(Modifier.weight(1f))
                 if (canPrice) TextButton(onClick = onPrice) { Text(stringResource(R.string.change_price)) }
@@ -177,8 +221,69 @@ private fun CartLineCard(
                     Text(if (line.discountPaise > 0) stringResource(R.string.discount_applied, Money(line.discountPaise).format()) else stringResource(R.string.discount))
                 }
             }
+            if (canOverrideBatch) TextButton(onClick = onBatch) {
+                Text(
+                    if (line.preferredBatchLabel == null) stringResource(R.string.sale_batch_auto)
+                    else stringResource(R.string.sale_batch_selected, line.preferredBatchLabel),
+                )
+            }
+            if (line.packUnitSymbol != null && line.packSizeMilli != null) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    FilterChip(
+                        selected = !line.usingPackUnit,
+                        onClick = { onUnit(false) },
+                        label = { Text(stringResource(R.string.checkout_add_by_unit, line.baseUnitSymbol)) },
+                    )
+                    FilterChip(
+                        selected = line.usingPackUnit,
+                        onClick = { onUnit(true) },
+                        label = { Text(stringResource(R.string.checkout_add_by_unit, line.packUnitSymbol)) },
+                    )
+                }
+            }
         }
     }
+}
+
+@Composable
+private fun BatchPicker(
+    batches: List<BatchEntity>,
+    symbol: String,
+    selectedBatchId: String?,
+    onSelect: (BatchEntity?) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.sale_choose_batch)) },
+        text = {
+            LazyColumn(Modifier.heightIn(max = 360.dp)) {
+                item {
+                    ListItem(
+                        modifier = Modifier.clickable { onSelect(null) },
+                        headlineContent = { Text(stringResource(R.string.sale_batch_auto)) },
+                        supportingContent = { Text(stringResource(R.string.sale_batch_auto_hint)) },
+                        trailingContent = { if (selectedBatchId == null) Icon(Icons.Filled.Check, null) },
+                    )
+                }
+                items(batches, key = { it.id }) { batch ->
+                    ListItem(
+                        modifier = Modifier.clickable { onSelect(batch) },
+                        headlineContent = { Text(batch.batchNo ?: batch.id.take(8)) },
+                        supportingContent = {
+                            Text(
+                                "${Parsing.milliToInput(batch.qtyOnHandMilli)} $symbol · " +
+                                    (batch.expiryDate?.toString() ?: stringResource(R.string.no_expiry)),
+                            )
+                        },
+                        trailingContent = { if (selectedBatchId == batch.id) Icon(Icons.Filled.Check, null) },
+                    )
+                    HorizontalDivider()
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)

@@ -28,6 +28,7 @@ object ReceiptText {
     ): String = buildString {
         appendLine(store.name)
         if (store.address.isNotBlank()) appendLine(store.address)
+        if (store.city.isNotBlank()) appendLine(store.city)
         if (store.phone.isNotBlank()) appendLine("Ph: ${store.phone}")
         store.gstin?.let { appendLine("GSTIN: $it") }
         appendLine("Invoice: ${sale.invoiceNo}")

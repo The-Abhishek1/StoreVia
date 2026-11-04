@@ -41,6 +41,11 @@ class AccessTest {
         assertFalse(Permission.OVERRIDE_PRICE in c); assertFalse(Permission.CANCEL_BILL in c)
     }
 
+    @Test fun batchOverrideIsOwnerConfigurableForCashiers() {
+        assertFalse(Permission.OVERRIDE_BATCH in RolePermissions.of(Role.CASHIER))
+        assertTrue(Permission.OVERRIDE_BATCH in RolePermissions.of(Role.CASHIER, CashierOptions(canOverrideBatch = true)))
+    }
+
     @Test fun requireThrowsWhenNotAllowed() {
         val cashier = object : Access { override fun actor() = Actor("c", "Asha", Role.CASHIER, RolePermissions.of(Role.CASHIER)) }
         cashier.require(Permission.SELL)

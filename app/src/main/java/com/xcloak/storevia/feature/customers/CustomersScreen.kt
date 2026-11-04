@@ -18,6 +18,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xcloak.storevia.R
 import com.xcloak.storevia.core.access.Permission
 import com.xcloak.storevia.core.ui.can
+import com.xcloak.storevia.core.ui.LoadingState
 import com.xcloak.storevia.core.money.Money
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -53,7 +54,7 @@ fun CustomersScreen(onBack: () -> Unit, onOpen: (String) -> Unit, vm: CustomersV
             )
             val list = rows
             when {
-                list == null -> Unit
+                list == null -> LoadingState(Modifier.weight(1f).fillMaxWidth())
                 list.isEmpty() -> Column(
                     Modifier.fillMaxSize().padding(32.dp),
                     verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally,

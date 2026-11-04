@@ -18,6 +18,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewModelScope
+import com.xcloak.storevia.core.ui.LoadingState
 import com.xcloak.storevia.R
 import com.xcloak.storevia.core.database.dao.SaleDao
 import com.xcloak.storevia.core.database.entity.SaleEntity
@@ -52,7 +53,7 @@ fun SalesListScreen(onNewSale: () -> Unit, onOpen: (String) -> Unit, vm: SalesLi
     ) { padding ->
         val list = sales
         when {
-            list == null -> Unit
+            list == null -> LoadingState(Modifier.padding(padding))
             list.isEmpty() -> Column(
                 Modifier.padding(padding).fillMaxSize().padding(32.dp),
                 verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally,

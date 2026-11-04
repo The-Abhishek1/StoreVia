@@ -23,6 +23,7 @@ data class AppSettings(
     val localOnlyMode: Boolean = false,
     val cashierCanDiscount: Boolean = false,
     val cashierCanSellOnCredit: Boolean = false,
+    val cashierCanOverrideBatch: Boolean = false,
     val storeType: StoreType = StoreType.GENERAL,
     val themeMode: ThemeMode = ThemeMode.SYSTEM,
     val cloudStoreId: String? = null,
@@ -46,6 +47,7 @@ class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
             .putBoolean("onboarding_done", n.onboardingDone)
             .putBoolean("local_only_mode", n.localOnlyMode)
             .putBoolean("cashier_discount", n.cashierCanDiscount).putBoolean("cashier_credit", n.cashierCanSellOnCredit)
+            .putBoolean("cashier_batch_override", n.cashierCanOverrideBatch)
             .putString("store_type", n.storeType.name)
             .putString("theme_mode", n.themeMode.name)
             .putString("cloud_store_id", n.cloudStoreId)
@@ -79,6 +81,7 @@ class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
         localOnlyMode = sp.getBoolean("local_only_mode", false),
         cashierCanDiscount = sp.getBoolean("cashier_discount", false),
         cashierCanSellOnCredit = sp.getBoolean("cashier_credit", false),
+        cashierCanOverrideBatch = sp.getBoolean("cashier_batch_override", false),
         storeType = StoreType.fromName(sp.getString("store_type", StoreType.GENERAL.name)),
         themeMode = runCatching { ThemeMode.valueOf(sp.getString("theme_mode", ThemeMode.SYSTEM.name) ?: ThemeMode.SYSTEM.name) }
             .getOrDefault(ThemeMode.SYSTEM),

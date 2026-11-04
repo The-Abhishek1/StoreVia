@@ -34,7 +34,11 @@ class StaffSession @Inject constructor(staffDao: StaffDao, private val prefs: Ap
         .stateIn(scope, SharingStarted.Eagerly, false)
 
     val actorState: StateFlow<Actor> = combine(staff, currentId, prefs.settings) { list, id, settings ->
-        val options = CashierOptions(settings.cashierCanDiscount, settings.cashierCanSellOnCredit)
+        val options = CashierOptions(
+            canDiscount = settings.cashierCanDiscount,
+            canSellOnCredit = settings.cashierCanSellOnCredit,
+            canOverrideBatch = settings.cashierCanOverrideBatch,
+        )
         when {
             list == null -> Actor.NONE
             list.isEmpty() -> Actor.LOCAL_OWNER

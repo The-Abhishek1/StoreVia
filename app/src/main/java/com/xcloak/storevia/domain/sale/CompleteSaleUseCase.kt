@@ -9,6 +9,7 @@ import com.xcloak.storevia.core.money.DiscountAllocator
 import com.xcloak.storevia.core.money.GstCalculator
 import com.xcloak.storevia.core.money.Money
 import com.xcloak.storevia.core.money.Rounding
+import java.math.BigInteger
 import java.time.LocalDate
 import javax.inject.Inject
 
@@ -17,6 +18,7 @@ data class CartItem(
     val qtyMilli: Long,
     val unitPricePaise: Long,
     val discountPaise: Long = 0,
+    val preferredBatchId: String? = null,
 )
 
 data class PaymentInput(val method: PaymentMethod, val amountPaise: Long, val reference: String? = null)
@@ -44,6 +46,13 @@ class SaleValidationException(message: String) : Exception(message)
 class CreditLimitExceededException(val limitPaise: Long, val balancePaise: Long) :
     Exception("Credit limit exceeded")
 
+internal fun preferredBatchOrder(eligible: List<BatchEntity>, preferredBatchId: String?): List<BatchEntity> {
+    if (preferredBatchId == null) return eligible
+    val preferred = eligible.firstOrNull { it.id == preferredBatchId }
+        ?: throw SaleValidationException("Selected batch is unavailable or expired")
+    return listOf(preferred) + eligible.filterNot { it.id == preferredBatchId }
+}
+
 /**
  * Completes a sale in ONE database transaction: invoice number, FEFO batch allocation, tax split,
  * sale lines, stock ledger rows, batch balances, payments and khata. Any failure rolls everything back.
@@ -60,8 +69,18 @@ class CompleteSaleUseCase @Inject constructor(
     private val access: Access = OwnerAccess,
     private val audit: AuditSink = NoAudit,
     private val series: InvoiceSeries = NoSeries,
+    private val recipeDao: RecipeDao = db.recipeDao(),
+    private val serialNumberDao: SerialNumberDao = db.serialNumberDao(),
 ) {
-    private class Computed(val lines: List<SaleLineEntity>, val movements: List<StockMovementEntity>, val overrides: List<String>)
+    private data class SerialAssignment(val serialId: String, val saleLineId: String)
+    private class Computed(
+        val lines: List<SaleLineEntity>,
+        val movements: List<StockMovementEntity>,
+        val overrides: List<String>,
+        val batchOverrides: List<String>,
+        val soldAgainstNegativeStock: Boolean,
+        val serialAssignments: List<SerialAssignment>,
+    )
 
     private fun totalsOf(lines: List<SaleLineEntity>): SaleTotals {
         val (total, roundOff) = GstCalculator.roundToRupee(lines.sumOf { it.lineTotalPaise })
@@ -81,8 +100,9 @@ class CompleteSaleUseCase @Inject constructor(
         billDiscountPaise: Long = 0,
     ): SalePreview {
         val store = storeDao.get() ?: throw SaleValidationException("Store is not set up")
-        val c = computeLines("preview", items, store, interState, today, now = 0L, billDiscountPaise = billDiscountPaise)
-        return SalePreview(totalsOf(c.lines), c.lines, c.lines.any { it.batchId == null })
+        val branchId = db.branchDao().activeBranchId()
+        val c = computeLines("preview", items, store, branchId, interState, today, now = 0L, billDiscountPaise = billDiscountPaise)
+        return SalePreview(totalsOf(c.lines), c.lines, c.soldAgainstNegativeStock)
     }
 
     /** @return the new sale id */
@@ -100,8 +120,10 @@ class CompleteSaleUseCase @Inject constructor(
 
         return db.withTransaction {
             val store = storeDao.get() ?: throw SaleValidationException("Store is not set up")
+            val branchId = db.branchDao().activeBranchId()
             val saleId = java.util.UUID.randomUUID().toString()
-            val c = computeLines(saleId, items, store, interState, today, now, billDiscountPaise)
+            val c = computeLines(saleId, items, store, branchId, interState, today, now, billDiscountPaise)
+            if (items.any { it.preferredBatchId != null }) access.require(Permission.OVERRIDE_BATCH)
 
             // Cached balances move together with the ledger rows.
             for (m in c.movements) m.batchId?.let { batchDao.adjustQty(it, m.qtyMilli, now) }
@@ -128,13 +150,18 @@ class CompleteSaleUseCase @Inject constructor(
 
             saleDao.insertSale(
                 SaleEntity(
-                    id = saleId, invoiceNo = invoiceNo, customerId = customerId, interState = interState,
+                    id = saleId, invoiceNo = invoiceNo, branchId = branchId, customerId = customerId, interState = interState,
                     subtotalPaise = totals.subtotalPaise, discountPaise = totals.discountPaise,
                     taxPaise = totals.taxPaise, roundOffPaise = totals.roundOffPaise,
                     totalPaise = totals.totalPaise, paidPaise = paid, createdAt = now,
                 )
             )
             saleDao.insertLines(c.lines)
+            c.serialAssignments.forEach { assignment ->
+                if (serialNumberDao.markSold(assignment.serialId, assignment.saleLineId, now) != 1) {
+                    throw SaleValidationException("A serial number is no longer available.")
+                }
+            }
             stockDao.insertAll(c.movements)
             saleDao.insertPayments(payments.map {
                 PaymentEntity(saleId = saleId, customerId = customerId, method = it.method,
@@ -149,6 +176,7 @@ class CompleteSaleUseCase @Inject constructor(
             if (totals.discountPaise > 0)
                 audit.log(AuditAction.SALE_DISCOUNT, "Discount ${Money(totals.discountPaise).format()} on $invoiceNo (bill ${Money(totals.totalPaise).format()})", "SALE", saleId)
             c.overrides.forEach { audit.log(AuditAction.PRICE_OVERRIDE, "$invoiceNo: $it", "SALE", saleId) }
+            c.batchOverrides.forEach { audit.log(AuditAction.BATCH_OVERRIDE, "$invoiceNo: $it", "SALE", saleId) }
             saleId
         }
     }
@@ -158,6 +186,7 @@ class CompleteSaleUseCase @Inject constructor(
         saleId: String,
         items: List<CartItem>,
         store: StoreEntity,
+        branchId: String,
         interState: Boolean,
         today: LocalDate,
         now: Long,
@@ -166,6 +195,11 @@ class CompleteSaleUseCase @Inject constructor(
         val lines = mutableListOf<SaleLineEntity>()
         val movements = mutableListOf<StockMovementEntity>()
         val overrides = mutableListOf<String>()
+        val batchOverrides = mutableListOf<String>()
+        val reservedByBatch = mutableMapOf<String, Long>()
+        val reservedSerialIds = mutableSetOf<String>()
+        val serialAssignments = mutableListOf<SerialAssignment>()
+        var soldAgainstNegativeStock = false
 
         // A bill-level discount is spread over the lines in proportion to their value (after line discounts),
         // then treated as extra line discount, so tax is always computed on what the customer really pays.
@@ -187,15 +221,39 @@ class CompleteSaleUseCase @Inject constructor(
 
             data class Alloc(val batch: BatchEntity?, val qtyMilli: Long)
             val allocs = mutableListOf<Alloc>()
-            var remaining = item.qtyMilli
-            for (b in batchDao.fefoBatches(product.id, today)) {
-                if (remaining == 0L) break
-                val take = minOf(remaining, b.qtyOnHandMilli)
-                allocs += Alloc(b, take); remaining -= take
-            }
-            if (remaining > 0) {
-                if (!store.allowNegativeStock) throw InsufficientStockException(product.name, remaining)
-                allocs += Alloc(null, remaining)
+            val recipe = recipeDao.getForProduct(product.id)
+            if (recipe.isNotEmpty()) {
+                if (item.preferredBatchId != null) throw SaleValidationException("Batch override is unavailable for recipe products.")
+                allocs += Alloc(null, item.qtyMilli)
+            } else {
+                if (product.serialTracked && item.qtyMilli % 1_000L != 0L) {
+                    throw SaleValidationException("Serial-tracked products must be sold in whole units.")
+                }
+                var remaining = item.qtyMilli
+                val eligibleBatches = batchDao.fefoBatches(product.id, today, branchId)
+                val preferredBatch = item.preferredBatchId?.let { id ->
+                    eligibleBatches.firstOrNull { it.id == id }
+                        ?: throw SaleValidationException("Selected batch is unavailable or expired for ${product.name}")
+                }
+                if (preferredBatch != null) {
+                    batchOverrides += "${product.name}: selected batch ${preferredBatch.batchNo ?: preferredBatch.id}"
+                }
+                val allocationOrder = preferredBatchOrder(eligibleBatches, item.preferredBatchId)
+                for (b in allocationOrder) {
+                    if (remaining == 0L) break
+                    val available = (b.qtyOnHandMilli - (reservedByBatch[b.id] ?: 0L)).coerceAtLeast(0L)
+                    val take = minOf(remaining, available)
+                    if (take > 0) {
+                        allocs += Alloc(b, take)
+                        reservedByBatch[b.id] = (reservedByBatch[b.id] ?: 0L) + take
+                        remaining -= take
+                    }
+                }
+                if (remaining > 0) {
+                    if (product.serialTracked || !store.allowNegativeStock) throw InsufficientStockException(product.name, remaining)
+                    soldAgainstNegativeStock = true
+                    allocs += Alloc(null, remaining)
+                }
             }
 
             // One sale line per allocation; amount and discount split proportionally, remainder on the last.
@@ -213,7 +271,17 @@ class CompleteSaleUseCase @Inject constructor(
                     taxInclusive = product.taxInclusive,
                     interState = interState,
                 )
-                lines += SaleLineEntity(
+                val recipeUnitCost = if (recipe.isEmpty()) {
+                    a.batch?.costPaise ?: product.costPaise
+                } else {
+                    recipe.sumOf { component ->
+                        val ingredient = productDao.getById(component.ingredientProductId)
+                            ?: throw SaleValidationException("Recipe ingredient is unavailable.")
+                        val requiredForUnit = scaleMilli(component.quantityPerUnitMilli, 1_000L)
+                        Money(ingredient.costPaise).timesQtyMilli(requiredForUnit).paise
+                    }
+                }
+                val saleLine = SaleLineEntity(
                     saleId = saleId, productId = product.id, batchId = a.batch?.id,
                     nameSnapshot = product.name, hsnSnapshot = product.hsnCode,
                     qtyMilli = a.qtyMilli, unitPricePaise = item.unitPricePaise,
@@ -222,15 +290,71 @@ class CompleteSaleUseCase @Inject constructor(
                     taxableValuePaise = tax.taxableValue,
                     cgstPaise = tax.cgst, sgstPaise = tax.sgst, igstPaise = tax.igst,
                     lineTotalPaise = tax.lineTotal,
-                    costSnapshotPaise = a.batch?.costPaise ?: product.costPaise,
+                    costSnapshotPaise = recipeUnitCost,
                 )
-                movements += StockMovementEntity(
-                    productId = product.id, batchId = a.batch?.id, type = MovementType.SALE,
-                    qtyMilli = -a.qtyMilli, unitCostPaise = a.batch?.costPaise ?: product.costPaise,
-                    refType = "SALE", refId = saleId, createdAt = now,
-                )
+                lines += saleLine
+                if (recipe.isEmpty()) {
+                    if (product.serialTracked) {
+                        val batch = a.batch ?: throw InsufficientStockException(product.name, a.qtyMilli)
+                        val serials = serialNumberDao.availableForBatch(product.id, batch.id)
+                            .filterNot { it.id in reservedSerialIds }
+                        val requiredSerials = a.qtyMilli / 1_000L
+                        if (serials.size.toLong() < requiredSerials) {
+                            throw InsufficientStockException(product.name, (requiredSerials - serials.size) * 1_000L)
+                        }
+                        serials.take(requiredSerials.toInt()).forEach { serial ->
+                            reservedSerialIds += serial.id
+                            serialAssignments += SerialAssignment(serial.id, saleLine.id)
+                        }
+                    }
+                    movements += StockMovementEntity(
+                        productId = product.id, branchId = branchId, batchId = a.batch?.id, type = MovementType.SALE,
+                        qtyMilli = -a.qtyMilli, unitCostPaise = recipeUnitCost,
+                        refType = "SALE", refId = saleId, createdAt = now,
+                    )
+                } else {
+                    recipe.forEach { component ->
+                        val ingredient = productDao.getById(component.ingredientProductId)
+                            ?: throw SaleValidationException("Recipe ingredient is unavailable.")
+                        val required = scaleMilli(component.quantityPerUnitMilli, a.qtyMilli)
+                        if (required == 0L) return@forEach
+                        var ingredientRemaining = required
+                        val ingredientBatches = batchDao.fefoBatches(ingredient.id, today, branchId)
+                        for (batch in ingredientBatches) {
+                            if (ingredientRemaining == 0L) break
+                            val available = (batch.qtyOnHandMilli - (reservedByBatch[batch.id] ?: 0L)).coerceAtLeast(0L)
+                            val take = minOf(ingredientRemaining, available)
+                            if (take > 0) {
+                                reservedByBatch[batch.id] = (reservedByBatch[batch.id] ?: 0L) + take
+                                movements += StockMovementEntity(
+                                    productId = ingredient.id, branchId = branchId, batchId = batch.id, type = MovementType.SALE,
+                                    qtyMilli = -take, unitCostPaise = batch.costPaise,
+                                    refType = "RECIPE_SALE", refId = saleId, reason = saleLine.id, createdAt = now,
+                                )
+                                ingredientRemaining -= take
+                            }
+                        }
+                        if (ingredientRemaining > 0) {
+                            if (!store.allowNegativeStock) throw InsufficientStockException(ingredient.name, ingredientRemaining)
+                            soldAgainstNegativeStock = true
+                            movements += StockMovementEntity(
+                                productId = ingredient.id, branchId = branchId, batchId = null, type = MovementType.SALE,
+                                qtyMilli = -ingredientRemaining, unitCostPaise = ingredient.costPaise,
+                                refType = "RECIPE_SALE", refId = saleId, reason = saleLine.id, createdAt = now,
+                            )
+                        }
+                    }
+                }
             }
         }
-        return Computed(lines, movements, overrides)
+        return Computed(lines, movements, overrides, batchOverrides, soldAgainstNegativeStock, serialAssignments)
+    }
+
+    private fun scaleMilli(quantityMilli: Long, productQuantityMilli: Long): Long {
+        val scaled = BigInteger.valueOf(quantityMilli)
+            .multiply(BigInteger.valueOf(productQuantityMilli))
+            .add(BigInteger.valueOf(500))
+            .divide(BigInteger.valueOf(1_000))
+        return scaled.longValueExact()
     }
 }

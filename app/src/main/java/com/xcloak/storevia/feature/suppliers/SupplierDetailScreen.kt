@@ -17,6 +17,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.xcloak.storevia.core.ui.LoadingState
 import com.xcloak.storevia.R
 import com.xcloak.storevia.core.database.entity.PaymentMethod
 import com.xcloak.storevia.core.database.entity.SupplierLedgerType
@@ -49,7 +50,10 @@ fun SupplierDetailScreen(
             navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.back)) } },
             actions = { if (d != null) IconButton(onClick = { editing = true }) { Icon(Icons.Filled.Edit, stringResource(R.string.edit)) } },
         )
-        if (d == null) return@Column
+        if (d == null) {
+            LoadingState(Modifier.weight(1f).fillMaxWidth())
+            return@Column
+        }
 
         Column(Modifier.padding(horizontal = 16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(stringResource(R.string.balance_label), style = MaterialTheme.typography.labelLarge)

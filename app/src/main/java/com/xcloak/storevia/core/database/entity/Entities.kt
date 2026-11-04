@@ -20,7 +20,9 @@ private fun newId() = UUID.randomUUID().toString()
 data class StoreEntity(
     @PrimaryKey val id: String = newId(),
     val name: String,
+    val ownerName: String = "",
     val address: String = "",
+    val city: String = "",
     val phone: String = "",
     val gstin: String? = null,
     val stateCode: String = "29",          // GST state code, 29 = Karnataka
@@ -29,6 +31,22 @@ data class StoreEntity(
     val allowNegativeStock: Boolean = true,
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = createdAt,
+    val dirty: Boolean = true,
+)
+
+@Entity(tableName = "branches", indices = [Index(value = ["name"], unique = true)])
+data class BranchEntity(
+    @PrimaryKey val id: String = newId(),
+    val name: String,
+    val address: String = "",
+    val city: String = "",
+    val phone: String = "",
+    val isActive: Boolean = true,
+    /** Selected branch is per device and must never sync to other phones. */
+    val selectedOnDevice: Boolean = false,
+    val createdAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = createdAt,
+    val deletedAt: Long? = null,
     val dirty: Boolean = true,
 )
 
@@ -54,11 +72,14 @@ data class CategoryEntity(
 
 @Entity(
     tableName = "products",
-    indices = [Index("name"), Index("sku"), Index("categoryId")],
+    indices = [Index("name"), Index("sku"), Index("categoryId"), Index("parentProductId")],
 )
 data class ProductEntity(
     @PrimaryKey val id: String = newId(),
     val name: String,
+    /** Null for a regular product or variant-group template; otherwise links this sellable variant to its template. */
+    val parentProductId: String? = null,
+    val variantLabel: String? = null,
     val sku: String? = null,
     val categoryId: String? = null,
     val unitId: String,
@@ -69,10 +90,62 @@ data class ProductEntity(
     val sellPricePaise: Long,
     val costPaise: Long = 0,
     val trackExpiry: Boolean = false,
+    val serialTracked: Boolean = false,
     val minStockMilli: Long = 0,
     val isActive: Boolean = true,
+    /** Store-type-specific and user-defined product fields stored as a JSON object. */
+    val attributesJson: String = "{}",
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = createdAt,
+    val deletedAt: Long? = null,
+    val dirty: Boolean = true,
+)
+
+@Entity(
+    tableName = "recipe_components",
+    foreignKeys = [
+        ForeignKey(ProductEntity::class, ["id"], ["recipeProductId"], onDelete = ForeignKey.CASCADE),
+        ForeignKey(ProductEntity::class, ["id"], ["ingredientProductId"], onDelete = ForeignKey.CASCADE),
+    ],
+    indices = [
+        Index(value = ["recipeProductId", "ingredientProductId"], unique = true),
+        Index("ingredientProductId"),
+    ],
+)
+data class RecipeComponentEntity(
+    @PrimaryKey val id: String = newId(),
+    val recipeProductId: String,
+    val ingredientProductId: String,
+    /** Ingredient quantity consumed for each 1,000 milli-units sold of the recipe product. */
+    val quantityPerUnitMilli: Long,
+    val updatedAt: Long = System.currentTimeMillis(),
+    val deletedAt: Long? = null,
+    val dirty: Boolean = true,
+)
+
+enum class SerialNumberStatus { AVAILABLE, SOLD }
+
+@Entity(
+    tableName = "serial_numbers",
+    foreignKeys = [
+        ForeignKey(ProductEntity::class, ["id"], ["productId"], onDelete = ForeignKey.CASCADE),
+        ForeignKey(BatchEntity::class, ["id"], ["batchId"], onDelete = ForeignKey.CASCADE),
+    ],
+    indices = [
+        Index(value = ["serialNumber"], unique = true),
+        Index("productId"),
+        Index(value = ["batchId", "status"]),
+        Index(value = ["saleLineId", "status"]),
+    ],
+)
+data class SerialNumberEntity(
+    @PrimaryKey val id: String = newId(),
+    val productId: String,
+    val batchId: String,
+    val serialNumber: String,
+    val status: SerialNumberStatus = SerialNumberStatus.AVAILABLE,
+    val saleLineId: String? = null,
+    val updatedAt: Long = System.currentTimeMillis(),
     val deletedAt: Long? = null,
     val dirty: Boolean = true,
 )
@@ -96,11 +169,12 @@ data class ProductBarcodeEntity(
 @Entity(
     tableName = "batches",
     foreignKeys = [ForeignKey(ProductEntity::class, ["id"], ["productId"])],
-    indices = [Index(value = ["productId", "expiryDate"])],
+    indices = [Index(value = ["productId", "expiryDate"]), Index(value = ["branchId", "productId", "expiryDate"])],
 )
 data class BatchEntity(
     @PrimaryKey val id: String = newId(),
     val productId: String,
+    val branchId: String = "default",
     val batchNo: String? = null,
     val expiryDate: LocalDate? = null,
     val costPaise: Long = 0,
@@ -121,11 +195,15 @@ enum class MovementType {
 
 @Entity(
     tableName = "stock_movements",
-    indices = [Index(value = ["productId", "createdAt"]), Index("batchId"), Index(value = ["refType", "refId"])],
+    indices = [
+        Index(value = ["productId", "createdAt"]), Index("batchId"), Index(value = ["refType", "refId"]),
+        Index(value = ["branchId", "productId", "createdAt"]),
+    ],
 )
 data class StockMovementEntity(
     @PrimaryKey val id: String = newId(),
     val productId: String,
+    val branchId: String = "default",
     val batchId: String? = null,
     val type: MovementType,
     /** Signed: positive adds stock, negative removes it. */
@@ -155,11 +233,12 @@ enum class SaleStatus { COMPLETED, CANCELLED, PARTIAL_RETURN, RETURNED }
 
 @Entity(
     tableName = "sales",
-    indices = [Index(value = ["invoiceNo"], unique = true), Index("customerId"), Index("createdAt")],
+    indices = [Index(value = ["invoiceNo"], unique = true), Index("customerId"), Index("createdAt"), Index(value = ["branchId", "createdAt"])],
 )
 data class SaleEntity(
     @PrimaryKey val id: String = newId(),
     val invoiceNo: String,
+    val branchId: String = "default",
     val customerId: String? = null,
     val status: SaleStatus = SaleStatus.COMPLETED,
     val interState: Boolean = false,
@@ -301,9 +380,10 @@ data class SupplierEntity(
 )
 
 /** Stock bought from a supplier (or off the street). Purchase stock arrives as batches + PURCHASE ledger rows. */
-@Entity(tableName = "purchases", indices = [Index("supplierId"), Index("purchaseDate")])
+@Entity(tableName = "purchases", indices = [Index("supplierId"), Index("purchaseDate"), Index(value = ["branchId", "supplierId"])])
 data class PurchaseEntity(
     @PrimaryKey val id: String = newId(),
+    val branchId: String = "default",
     val supplierId: String? = null,
     val invoiceNo: String? = null,
     /** Start of the purchase day, local time. */

@@ -84,7 +84,20 @@ fun PurchaseEditScreen(onBack: () -> Unit, onScan: () -> Unit, onSaved: (String)
                             Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Column(Modifier.weight(1f)) {
                                     Text(l.name, style = MaterialTheme.typography.titleMedium)
-                                    Text(stringResource(R.string.line_price_qty, Money(l.unitCostPaise).format(), Parsing.milliToInput(l.qtyMilli), l.unitSymbol), style = MaterialTheme.typography.bodySmall)
+                                    Text(
+                                        if (l.usingPackUnit) stringResource(
+                                            R.string.purchase_line_pack_qty,
+                                            Parsing.milliToInput(l.displayQtyMilli),
+                                            l.unitSymbol,
+                                            l.baseUnitSymbol,
+                                        ) else stringResource(
+                                            R.string.line_price_qty,
+                                            Money(l.unitCostPaise).format(),
+                                            Parsing.milliToInput(l.qtyMilli),
+                                            l.unitSymbol,
+                                        ),
+                                        style = MaterialTheme.typography.bodySmall,
+                                    )
                                     val extra = listOfNotNull(l.batchNo?.let { stringResource(R.string.batch_label, it) }, l.expiry?.let { stringResource(R.string.expires_on, it.format(DATE)) })
                                     if (extra.isNotEmpty()) Text(extra.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
                                 }
@@ -132,7 +145,7 @@ fun PurchaseEditScreen(onBack: () -> Unit, onScan: () -> Unit, onSaved: (String)
                 line,
                 supportsBatchTracking = features.supportsBatchTracking,
                 supportsExpiryTracking = features.supportsExpiryTracking,
-                onSave = { q, c, b, e -> vm.updateLine(id, q, c, b, e) },
+                onSave = { q, c, b, e, usePack, serials -> vm.updateLine(id, q, c, b, e, usePack, serials) },
                 onDismiss = { vm.openLine(null) },
             )
         }
@@ -148,19 +161,21 @@ fun PurchaseEditScreen(onBack: () -> Unit, onScan: () -> Unit, onSaved: (String)
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun LineDialog(
     line: PurchaseLineUi,
     supportsBatchTracking: Boolean,
     supportsExpiryTracking: Boolean,
-    onSave: (String, String, String, LocalDate?) -> Int?,
+    onSave: (String, String, String, LocalDate?, Boolean, String) -> Int?,
     onDismiss: () -> Unit,
 ) {
-    var qty by remember { mutableStateOf(Parsing.milliToInput(line.qtyMilli)) }
+    var usingPackUnit by remember { mutableStateOf(line.usingPackUnit) }
+    var qty by remember { mutableStateOf(Parsing.milliToInput(line.displayQtyMilli)) }
     var cost by remember { mutableStateOf(Parsing.paiseToInput(line.unitCostPaise)) }
     var batch by remember { mutableStateOf(line.batchNo.orEmpty()) }
     var expiry by remember { mutableStateOf(line.expiry) }
+    var serialNumbers by remember { mutableStateOf(line.serialNumbersText) }
     var error by remember { mutableStateOf<Int?>(null) }
     var picking by remember { mutableStateOf(false) }
 
@@ -169,10 +184,57 @@ private fun LineDialog(
         title = { Text(line.name) },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(qty, { qty = it; error = null }, singleLine = true, suffix = { Text(line.unitSymbol) }, label = { Text(stringResource(R.string.field_qty)) },
+                if (line.packUnitSymbol != null && line.packSizeMilli != null) {
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        FilterChip(
+                            selected = !usingPackUnit,
+                            onClick = {
+                                if (usingPackUnit) {
+                                    qty = ""
+                                    usingPackUnit = false
+                                }
+                            },
+                            label = { Text(line.baseUnitSymbol) },
+                        )
+                        FilterChip(
+                            selected = usingPackUnit,
+                            onClick = {
+                                if (!usingPackUnit) {
+                                    qty = ""
+                                    usingPackUnit = true
+                                }
+                            },
+                            label = { Text(line.packUnitSymbol) },
+                        )
+                    }
+                }
+                OutlinedTextField(
+                    qty,
+                    { qty = it; error = null },
+                    singleLine = true,
+                    suffix = { Text(if (usingPackUnit) line.packUnitSymbol.orEmpty() else line.baseUnitSymbol) },
+                    label = { Text(stringResource(R.string.field_qty)) },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
-                OutlinedTextField(cost, { cost = it; error = null }, singleLine = true, label = { Text(stringResource(R.string.field_unit_cost)) },
+                OutlinedTextField(
+                    cost,
+                    { cost = it; error = null },
+                    singleLine = true,
+                    label = { Text(stringResource(R.string.field_unit_cost_base, line.baseUnitSymbol)) },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
+                if (line.serialTracked) {
+                    OutlinedTextField(
+                        value = serialNumbers,
+                        onValueChange = { serialNumbers = it; error = null },
+                        minLines = 2,
+                        label = { Text(stringResource(R.string.product_serial_numbers)) },
+                        supportingText = { Text(stringResource(R.string.serial_numbers_entry_hint)) },
+                    )
+                }
+                if (line.packUnitSymbol != null && line.packSizeMilli != null) Text(
+                    stringResource(R.string.purchase_pack_conversion_note, line.baseUnitSymbol),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
                 if (supportsBatchTracking) {
                     OutlinedTextField(batch, { batch = it }, singleLine = true, label = { Text(stringResource(R.string.field_batch_no)) })
                 }
@@ -184,7 +246,7 @@ private fun LineDialog(
                 error?.let { Text(stringResource(it), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
             }
         },
-        confirmButton = { TextButton(onClick = { val e = onSave(qty, cost, batch, expiry); if (e == null) onDismiss() else error = e }) { Text(stringResource(R.string.save)) } },
+        confirmButton = { TextButton(onClick = { val e = onSave(qty, cost, batch, expiry, usingPackUnit, serialNumbers); if (e == null) onDismiss() else error = e }) { Text(stringResource(R.string.save)) } },
         dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
     )
     if (picking && supportsExpiryTracking) {

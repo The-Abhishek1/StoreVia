@@ -15,6 +15,7 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.xcloak.storevia.core.ui.LoadingState
 import com.xcloak.storevia.R
 import com.xcloak.storevia.core.money.Money
 
@@ -50,7 +51,7 @@ fun SuppliersScreen(onBack: () -> Unit, onOpen: (String) -> Unit, vm: SuppliersV
             )
             val list = rows
             when {
-                list == null -> Unit
+                list == null -> LoadingState(Modifier.weight(1f).fillMaxWidth())
                 list.isEmpty() -> Column(Modifier.fillMaxSize().padding(32.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(stringResource(R.string.suppliers_empty), style = MaterialTheme.typography.titleMedium)
                     Spacer(Modifier.height(8.dp))

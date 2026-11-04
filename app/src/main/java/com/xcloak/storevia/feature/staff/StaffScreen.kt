@@ -21,6 +21,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xcloak.storevia.R
 import com.xcloak.storevia.core.access.Role
 import com.xcloak.storevia.core.database.entity.StaffEntity
+import com.xcloak.storevia.core.ui.LoadingState
 import kotlinx.coroutines.launch
 
 @Composable
@@ -73,16 +74,21 @@ fun StaffScreen(onBack: () -> Unit, vm: StaffViewModel = hiltViewModel()) {
                     Text(stringResource(R.string.cashier_rules), style = MaterialTheme.typography.titleSmall)
                     SwitchRow(stringResource(R.string.cashier_discount), settings.cashierCanDiscount, vm::setCashierDiscount)
                     SwitchRow(stringResource(R.string.cashier_credit), settings.cashierCanSellOnCredit, vm::setCashierCredit)
+                    SwitchRow(stringResource(R.string.cashier_batch_override), settings.cashierCanOverrideBatch, vm::setCashierBatchOverride)
                     HorizontalDivider(Modifier.padding(vertical = 8.dp))
                     Text(stringResource(R.string.staff_list), style = MaterialTheme.typography.titleSmall)
                 }
-                items(staff.orEmpty(), key = { it.id }) { s ->
-                    ListItem(
-                        modifier = Modifier.clickable { editing = s },
-                        headlineContent = { Text(s.name, style = MaterialTheme.typography.titleMedium) },
-                        supportingContent = { Text(roleLabel(s.role) + if (!s.isActive) " · " + stringResource(R.string.staff_inactive) else "") },
-                    )
-                    HorizontalDivider()
+                if (staff == null) {
+                    item { LoadingState(Modifier.fillMaxWidth().height(180.dp)) }
+                } else {
+                    items(staff.orEmpty(), key = { it.id }) { s ->
+                        ListItem(
+                            modifier = Modifier.clickable { editing = s },
+                            headlineContent = { Text(s.name, style = MaterialTheme.typography.titleMedium) },
+                            supportingContent = { Text(roleLabel(s.role) + if (!s.isActive) " · " + stringResource(R.string.staff_inactive) else "") },
+                        )
+                        HorizontalDivider()
+                    }
                 }
                 item { Text(stringResource(R.string.staff_pin_note), style = MaterialTheme.typography.bodySmall) }
             }

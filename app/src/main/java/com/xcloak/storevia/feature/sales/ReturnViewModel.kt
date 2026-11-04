@@ -115,6 +115,7 @@ class ReturnViewModel @Inject constructor(
     private fun errorRes(e: ReturnException) = when (e.reason) {
         ReturnException.Reason.EXCEEDS_RETURNABLE -> R.string.err_exceeds_returnable
         ReturnException.Reason.CREDIT_NEEDS_CUSTOMER -> R.string.err_credit_needs_customer
+        ReturnException.Reason.SERIAL_STATE -> R.string.err_serial_state
         else -> R.string.err_nothing_to_return
     }
 

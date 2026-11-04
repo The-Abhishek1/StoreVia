@@ -6,6 +6,7 @@ import com.xcloak.storevia.core.util.Parsing
 import com.xcloak.storevia.core.database.StorviaDatabase
 import com.xcloak.storevia.core.database.dao.BatchDao
 import com.xcloak.storevia.core.database.dao.StockMovementDao
+import com.xcloak.storevia.core.database.dao.activeBranchId
 import com.xcloak.storevia.core.database.entity.MovementType
 import com.xcloak.storevia.core.database.entity.StockMovementEntity
 import javax.inject.Inject
@@ -36,14 +37,15 @@ class AdjustStockUseCase @Inject constructor(
         if (qtyMilli <= 0) throw StockAdjustException(StockAdjustException.Reason.INVALID_QTY)
 
         db.withTransaction {
-            val batch = batchDao.getById(batchId) ?: throw StockAdjustException(StockAdjustException.Reason.BATCH_NOT_FOUND)
+            val branchId = db.branchDao().activeBranchId()
+            val batch = batchDao.getById(batchId, branchId) ?: throw StockAdjustException(StockAdjustException.Reason.BATCH_NOT_FOUND)
             val signed = if (type == MovementType.ADJUSTMENT_IN) qtyMilli else -qtyMilli
             if (signed < 0 && qtyMilli > batch.qtyOnHandMilli) throw StockAdjustException(StockAdjustException.Reason.EXCEEDS_ON_HAND)
 
             batchDao.adjustQty(batchId, signed, now)
             stockDao.insert(
                 StockMovementEntity(
-                    productId = batch.productId, batchId = batchId, type = type, qtyMilli = signed,
+                    productId = batch.productId, branchId = branchId, batchId = batchId, type = type, qtyMilli = signed,
                     unitCostPaise = batch.costPaise, refType = "MANUAL", refId = batchId,
                     reason = note?.trim()?.ifEmpty { null }, createdAt = now,
                 )

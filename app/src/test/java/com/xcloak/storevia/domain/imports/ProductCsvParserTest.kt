@@ -56,6 +56,15 @@ class ProductCsvParserTest {
         assertEquals(ImportError.DUPLICATE_IN_FILE, r.errors.single().error); assertEquals(3, r.errors.single().line)
     }
 
+    @Test fun attributesJsonIsPreservedAndValidated() {
+        val valid = parse("name,price,attributes_json\nShirt,10,\"{\"\"color\"\":\"\"Blue\"\",\"\"size\"\":\"\"M\"\"}\"\n")
+        assertTrue(valid.errors.toString(), valid.errors.isEmpty())
+        assertEquals("""{"color":"Blue","size":"M"}""", valid.rows.single().attributesJson)
+
+        val invalid = parse("name,price,attributes_json\nShirt,10,\"[\"\"Blue\"\"]\"\n")
+        assertEquals(ImportError.ATTRIBUTES_INVALID, invalid.errors.single().error)
+    }
+
     @Test fun dateAndGstHelpers() {
         assertEquals(LocalDate.of(2027, 1, 5), ProductCsvParser.parseDate("2027-01-05"))
         assertEquals(LocalDate.of(2027, 1, 5), ProductCsvParser.parseDate("5-1-2027"))

@@ -34,8 +34,11 @@ fun ProductEditScreen(
     val units by vm.units.collectAsStateWithLifecycle()
     val categories by vm.categories.collectAsStateWithLifecycle()
     val features by vm.features.collectAsStateWithLifecycle()
+    val attributePresets by vm.attributePresets.collectAsStateWithLifecycle()
     val f = ui.form
     var confirmArchive by remember { mutableStateOf(false) }
+    var showAddAttribute by remember { mutableStateOf(false) }
+    var newAttributeName by remember { mutableStateOf("") }
 
     LaunchedEffect(Unit) {
         vm.events.collect { e ->
@@ -50,7 +53,13 @@ fun ProductEditScreen(
 
     Column(Modifier.fillMaxSize().imePadding()) {
         TopAppBar(
-            title = { Text(stringResource(if (ui.isNew) R.string.new_product else R.string.edit_product)) },
+            title = {
+                Text(stringResource(when {
+                    vm.isVariant -> R.string.new_product_variant
+                    ui.isNew -> R.string.new_product
+                    else -> R.string.edit_product
+                }))
+            },
             navigationIcon = {
                 IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.back)) }
             },
@@ -60,6 +69,14 @@ fun ProductEditScreen(
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Field(f.name, { v -> vm.update { copy(name = v) } }, R.string.field_name, errText(ui.errors["name"]))
+            if (vm.isVariant) {
+                Field(
+                    f.variantLabel,
+                    { v -> vm.update { copy(variantLabel = v) } },
+                    R.string.field_variant_label,
+                    errText(ui.errors["variant"]),
+                )
+            }
             Field(f.sku, { v -> vm.update { copy(sku = v) } }, R.string.field_sku)
             Field(
                 f.barcode, { v -> vm.update { copy(barcode = v) } }, R.string.field_barcode, errText(ui.errors["barcode"]),
@@ -87,6 +104,11 @@ fun ProductEditScreen(
                     Field(f.cost, { v -> vm.update { copy(cost = v) } }, R.string.field_cost, errText(ui.errors["cost"]), KeyboardType.Decimal)
                 }
             }
+            Text(
+                stringResource(R.string.product_base_unit_pricing_note, unit?.symbol.orEmpty()),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 Box(Modifier.weight(1f)) {
                     Dropdown(
@@ -107,6 +129,47 @@ fun ProductEditScreen(
             )
             if (features.supportsExpiryTracking) {
                 SwitchRow(stringResource(R.string.field_track_expiry), f.trackExpiry) { v -> vm.update { copy(trackExpiry = v) } }
+            }
+            SwitchRow(stringResource(R.string.product_track_serial_numbers), f.serialTracked) { v ->
+                vm.update { copy(serialTracked = v) }
+            }
+            errText(ui.errors["serial"])?.let {
+                Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+            }
+            if (attributePresets.isNotEmpty() || f.attributes.isNotEmpty() || ui.isNew) {
+                HorizontalDivider()
+                Text(stringResource(R.string.product_type_details), style = MaterialTheme.typography.titleMedium)
+                attributePresets.forEach { preset ->
+                    OutlinedTextField(
+                        value = f.attributes[preset.key].orEmpty(),
+                        onValueChange = { vm.updateAttribute(preset.key, it) },
+                        singleLine = true,
+                        label = { Text(stringResource(preset.label)) },
+                        modifier = Modifier.fillMaxWidth(),
+                        isError = preset.key in setOf("pack_unit", "pack_size") && "pack" in ui.errors,
+                        supportingText = if (preset.key == "pack_size" && "pack" in ui.errors) {
+                            { Text(errText(ui.errors["pack"]).orEmpty()) }
+                        } else null,
+                    )
+                }
+                val presetKeys = attributePresets.map { it.key }.toSet()
+                f.attributes.filterKeys { it !in presetKeys }.forEach { (key, value) ->
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(
+                            value = value,
+                            onValueChange = { vm.updateAttribute(key, it) },
+                            singleLine = true,
+                            label = { Text(key) },
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = { vm.removeAttribute(key) }) {
+                            Text(stringResource(R.string.product_remove_custom_attribute))
+                        }
+                    }
+                }
+                OutlinedButton(onClick = { showAddAttribute = true }, modifier = Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.product_add_custom_attribute))
+                }
             }
 
             if (!ui.isNew) {
@@ -129,6 +192,35 @@ fun ProductEditScreen(
             text = { Text(stringResource(R.string.archive_confirm_body)) },
             confirmButton = { TextButton(onClick = { confirmArchive = false; vm.archive() }) { Text(stringResource(R.string.archive)) } },
             dismissButton = { TextButton(onClick = { confirmArchive = false }) { Text(stringResource(R.string.cancel)) } },
+        )
+    }
+    if (showAddAttribute) {
+        AlertDialog(
+            onDismissRequest = { showAddAttribute = false; newAttributeName = "" },
+            title = { Text(stringResource(R.string.product_add_custom_attribute)) },
+            text = {
+                OutlinedTextField(
+                    value = newAttributeName,
+                    onValueChange = { newAttributeName = it },
+                    singleLine = true,
+                    label = { Text(stringResource(R.string.product_custom_attribute_name)) },
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        vm.addCustomAttribute(newAttributeName)
+                        newAttributeName = ""
+                        showAddAttribute = false
+                    },
+                    enabled = newAttributeName.isNotBlank(),
+                ) { Text(stringResource(R.string.product_add_custom_attribute_confirm)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { showAddAttribute = false; newAttributeName = "" }) {
+                    Text(stringResource(R.string.cancel))
+                }
+            },
         )
     }
 }

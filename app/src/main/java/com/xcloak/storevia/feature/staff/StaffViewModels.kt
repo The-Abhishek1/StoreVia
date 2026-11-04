@@ -70,6 +70,9 @@ class StaffViewModel @Inject constructor(
 
     fun setCashierDiscount(on: Boolean) = change("Cashiers can give discounts: ${if (on) "on" else "off"}") { prefs.update { copy(cashierCanDiscount = on) } }
     fun setCashierCredit(on: Boolean) = change("Cashiers can sell on credit: ${if (on) "on" else "off"}") { prefs.update { copy(cashierCanSellOnCredit = on) } }
+    fun setCashierBatchOverride(on: Boolean) = change("Cashiers can override FEFO batch selection: ${if (on) "on" else "off"}") {
+        prefs.update { copy(cashierCanOverrideBatch = on) }
+    }
 
     private fun change(summary: String, apply: () -> Unit) {
         if (!session.actor().can(Permission.MANAGE_STAFF)) return

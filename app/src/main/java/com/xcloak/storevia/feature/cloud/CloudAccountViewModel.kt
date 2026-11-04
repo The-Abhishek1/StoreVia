@@ -2,6 +2,7 @@ package com.xcloak.storevia.feature.cloud
 
 import android.app.Activity
 import android.content.Context
+import android.util.Patterns
 import com.android.billingclient.api.BillingClient
 import com.android.billingclient.api.BillingClientStateListener
 import com.android.billingclient.api.BillingFlowParams
@@ -185,7 +186,12 @@ class CloudAccountViewModel @Inject constructor(
             val plan = cloud.planSnapshot()
             _ui.update { it.copy(billingBusy = false, plan = plan, message = "Google Play verified your Pro subscription.") }
         } catch (e: Exception) {
-            _ui.update { it.copy(billingBusy = false, message = e.message ?: "Server verification failed. You can retry from this screen.") }
+            _ui.update {
+                it.copy(
+                    billingBusy = false,
+                    message = safeCloudError(e, "Server verification failed. You can retry from this screen."),
+                )
+            }
         }
     }
 
@@ -205,16 +211,34 @@ class CloudAccountViewModel @Inject constructor(
         return "every $count $unit" + if (count == 1) "" else "s"
     }
 
-    fun authenticate(email: String, password: String, createAccount: Boolean) {
-        if (email.isBlank() || password.length < 8) {
-            _ui.update { it.copy(message = "Enter a valid email and a password with at least 8 characters.") }
+    fun authenticate(identifier: String, password: String, createAccount: Boolean, confirmPassword: String = password) {
+        val trimmedIdentifier = identifier.trim()
+        val isEmail = trimmedIdentifier.contains("@")
+        if (trimmedIdentifier.isBlank() || password.length < 8) {
+            _ui.update { it.copy(message = "Enter your email or mobile number and a password with at least 8 characters.") }
+            return
+        }
+        if (createAccount && !Patterns.EMAIL_ADDRESS.matcher(trimmedIdentifier).matches()) {
+            _ui.update { it.copy(message = "Enter a valid email address for your cloud account.") }
+            return
+        }
+        if (createAccount && password != confirmPassword) {
+            _ui.update { it.copy(message = "Passwords do not match.") }
+            return
+        }
+        if (!createAccount && !isEmail && !trimmedIdentifier.matches(Regex("^\\+[1-9]\\d{7,14}$"))) {
+            _ui.update { it.copy(message = "Enter your mobile number with country code, for example +919876543210.") }
+            return
+        }
+        if (createAccount && !isEmail) {
+            _ui.update { it.copy(message = "Create an account with an email address. You can sign in with a mobile number if it is enabled on your account.") }
             return
         }
         viewModelScope.launch {
             _ui.update { it.copy(busy = true, message = null) }
             try {
                 if (createAccount) {
-                    cloud.signUp(email, password)
+                cloud.signUp(trimmedIdentifier, password)
                     val signedIn = cloud.signedInEmail()
                     _ui.value = CloudAccountUiState(
                         email = signedIn,
@@ -223,12 +247,46 @@ class CloudAccountViewModel @Inject constructor(
                     )
                     refreshPlan()
                 } else {
-                    cloud.signIn(email, password)
+                    if (isEmail) cloud.signIn(trimmedIdentifier, password)
+                    else cloud.signInWithPhone(trimmedIdentifier, password)
                     _ui.value = CloudAccountUiState(email = cloud.signedInEmail(), message = "Signed in. Connect this store to continue.")
                     refreshPlan()
                 }
             } catch (e: Exception) {
-                _ui.value = CloudAccountUiState(email = cloud.signedInEmail(), message = e.message ?: "Cloud authentication failed.")
+                _ui.value = CloudAccountUiState(
+                    email = cloud.signedInEmail(),
+                    message = CloudAuthError.message(e)
+                        ?: safeCloudError(
+                            e,
+                            "Cloud authentication failed. Check your credentials and try again.",
+                            emailRedirectRequest = createAccount,
+                        ),
+                )
+            }
+        }
+    }
+
+    fun sendPasswordReset(identifier: String) = viewModelScope.launch {
+        val email = identifier.trim()
+        if (!email.contains("@")) {
+            _ui.update {
+                it.copy(message = "Password reset is available by email. Enter the email linked to your account.")
+            }
+            return@launch
+        }
+        _ui.update { it.copy(busy = true, message = null) }
+        try {
+            cloud.sendPasswordReset(email)
+            _ui.update {
+                it.copy(busy = false, message = "If an account exists for this email, a password reset link has been sent.")
+            }
+        } catch (error: Exception) {
+            _ui.update {
+                it.copy(
+                    busy = false,
+                    message = CloudAuthError.message(error)
+                        ?: safeCloudError(error, "Could not send the password reset email. Try again later.", emailRedirectRequest = true),
+                )
             }
         }
     }
@@ -241,9 +299,21 @@ class CloudAccountViewModel @Inject constructor(
         _ui.update { it.copy(busy = true, message = null) }
         try {
             cloud.resendSignupConfirmation(email)
-            _ui.update { it.copy(busy = false, awaitingEmailConfirmation = true, message = "A fresh confirmation link was sent. Open it soon on this device.") }
+            _ui.update {
+                it.copy(
+                    busy = false,
+                    awaitingEmailConfirmation = true,
+                    message = "A fresh verification link is on its way. Check your inbox and spam folder, then tap the link to verify your email.",
+                )
+            }
         } catch (e: Exception) {
-            _ui.update { it.copy(busy = false, message = e.message ?: "Could not resend the confirmation email.") }
+            _ui.update {
+                it.copy(
+                    busy = false,
+                    message = CloudAuthError.message(e)
+                        ?: safeCloudError(e, "Could not resend the confirmation email. Try again later.", emailRedirectRequest = true),
+                )
+            }
         }
     }
 
@@ -251,6 +321,10 @@ class CloudAccountViewModel @Inject constructor(
         val email = cloud.signedInEmail()
         _ui.update { it.copy(email = email, awaitingEmailConfirmation = if (email == null) it.awaitingEmailConfirmation else false) }
         if (email != null) refreshPlan()
+    }
+
+    fun clearMessageForAuthentication() {
+        _ui.update { it.copy(message = null) }
     }
 
     fun connect() = runCloudAction(cloud::connectAndSync)
@@ -264,7 +338,10 @@ class CloudAccountViewModel @Inject constructor(
             WorkManager.getInstance(context).cancelUniqueWork(CloudSyncWorker.WORK_NAME)
             _ui.value = CloudAccountUiState(message = "Signed out. Local store data remains on this phone.")
         } catch (e: Exception) {
-            _ui.value = CloudAccountUiState(email = cloud.signedInEmail(), message = e.message ?: "Could not sign out.")
+            _ui.value = CloudAccountUiState(
+                email = cloud.signedInEmail(),
+                message = safeCloudError(e, "Could not sign out. Try again."),
+            )
         }
     }
 
@@ -283,8 +360,81 @@ class CloudAccountViewModel @Inject constructor(
             )
             refreshExistingPurchases()
         } catch (e: Exception) {
-            _ui.value = CloudAccountUiState(email = cloud.signedInEmail(), message = e.message ?: "Cloud operation failed.")
+            _ui.value = CloudAccountUiState(
+                email = cloud.signedInEmail(),
+                message = safeCloudError(e, "Cloud operation failed. Check your connection and try again."),
+            )
         }
+    }
+
+    private fun safeCloudError(
+        error: Throwable,
+        fallback: String,
+        emailRedirectRequest: Boolean = false,
+    ): String {
+        CloudAuthError.message(error)?.let { return it }
+        val messages = generateSequence(error) { it.cause }.take(16).mapNotNull { it.message }.toList()
+        if (messages.any {
+                it.contains("over_email_send_rate_limit", ignoreCase = true) ||
+                    it.contains("email rate limit", ignoreCase = true)
+            }
+        ) {
+            return "Supabase rate-limited verification emails. Wait a few minutes before requesting another."
+        }
+        if (messages.any {
+                it.contains("smtp", ignoreCase = true) ||
+                    it.contains("email provider", ignoreCase = true) ||
+                    it.contains("email sending is not enabled", ignoreCase = true)
+            }
+        ) {
+            return "Supabase could not send the verification email. Check Authentication → SMTP Settings and the Supabase Auth logs."
+        }
+        if (emailRedirectRequest && messages.any {
+                it.contains("redirect url", ignoreCase = true) ||
+                    it.contains("redirect_to", ignoreCase = true)
+            }
+        ) {
+            return "Supabase rejected the verification redirect. Add storevia://auth/callback to Authentication → URL Configuration → Redirect URLs."
+        }
+        if (messages.any {
+                it.contains("invalid api key", ignoreCase = true) ||
+                    it.contains("invalid jwt", ignoreCase = true) ||
+                    it.contains("http 401", ignoreCase = true) ||
+                    it.contains("http 403", ignoreCase = true)
+            }
+        ) {
+            return "The cloud project rejected the email request. Verify the Supabase project URL and anon key in the app configuration."
+        }
+        val resendStatus = messages.firstNotNullOfOrNull { message ->
+            Regex("Confirmation resend failed \\(HTTP (\\d{3})\\)", RegexOption.IGNORE_CASE)
+                .find(message)?.groupValues?.getOrNull(1)
+        }
+        if (resendStatus != null) {
+            return "Supabase rejected the verification email request (HTTP $resendStatus). Check Authentication → Logs for the exact reason."
+        }
+        if (messages.any {
+                it.contains("schema cache", ignoreCase = true) ||
+                    it.contains("could not find the function", ignoreCase = true)
+            }
+        ) {
+            return "Cloud setup needs an update. Apply the latest supabase/schema.sql in the Supabase SQL Editor, then try again."
+        }
+        if (messages.any { it.contains("subscriptions_plan_check", ignoreCase = true) }) {
+            return "Store creation failed because Supabase has an outdated store-creation function. Re-run the latest supabase/schema.sql, then retry."
+        }
+
+        val knownLocalErrors = setOf(
+            "Sign in to your cloud account first.",
+            "Finish setting up your store before enabling cloud sync.",
+            "This account is linked to a different store than before. Local data was not changed.",
+            "This account belongs to a different store. Back up this phone and restore that store's data before connecting. Local data was not changed.",
+            "Connect this store before syncing.",
+            "No local store is set up.",
+            "No store invitation found for this account.",
+        )
+        return (error as? IllegalStateException)?.message
+            ?.takeIf { it in knownLocalErrors }
+            ?: fallback
     }
 
     private fun refreshPlan() = viewModelScope.launch {

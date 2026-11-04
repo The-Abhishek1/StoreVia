@@ -44,14 +44,16 @@ fun StoreSettingsScreen(onBack: () -> Unit, vm: StoreSettingsViewModel = hiltVie
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(stringResource(R.string.section_business), style = MaterialTheme.typography.titleMedium)
                     Field(f.name, { v -> vm.update { copy(name = v) } }, R.string.field_store_name, errText(ui.errors["name"]))
+                    Field(f.ownerName, { v -> vm.update { copy(ownerName = v) } }, R.string.field_owner_name_required)
                     Field(f.address, { v -> vm.update { copy(address = v) } }, R.string.field_address)
+                    Field(f.city, { v -> vm.update { copy(city = v) } }, R.string.field_city_required)
                     Field(f.phone, { v -> vm.update { copy(phone = v) } }, R.string.field_phone_plain, keyboard = KeyboardType.Phone)
                 }
             }
             Card(Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(stringResource(R.string.section_gst), style = MaterialTheme.typography.titleMedium)
-                    StateDropdown(f.stateCode) { code -> vm.update { copy(stateCode = code) } }
+                    StateDropdown(f.stateCode, onSelect = { code -> vm.update { copy(stateCode = code) } })
                     Field(f.gstin, { v -> vm.update { copy(gstin = v.uppercase()) } }, R.string.field_gstin, errText(ui.errors["gstin"]), capitalize = true)
                     Text(stringResource(R.string.gstin_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
@@ -96,12 +98,17 @@ internal fun Field(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun StateDropdown(selected: String, onSelect: (String) -> Unit) {
+internal fun StateDropdown(selected: String, onSelect: (String) -> Unit, error: String? = null) {
     var open by remember { mutableStateOf(false) }
     ExposedDropdownMenuBox(expanded = open, onExpandedChange = { open = it }) {
         OutlinedTextField(
-            value = "$selected · ${GstStates.name(selected)}", onValueChange = {}, readOnly = true, singleLine = true,
+            value = if (selected.isBlank()) stringResource(R.string.select_state) else "$selected · ${GstStates.name(selected)}",
+            onValueChange = {},
+            readOnly = true,
+            singleLine = true,
             label = { Text(stringResource(R.string.field_state)) },
+            isError = error != null,
+            supportingText = error?.let { { Text(it) } },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = open) },
             modifier = Modifier.menuAnchor().fillMaxWidth(),
         )
