@@ -80,6 +80,14 @@ object SalesImportParser {
         return SalesImportDocument(summaries, lines, payments, errors)
     }
 
+    fun isCombinedFile(csv: String): Boolean {
+        val headers = Csv.parse(csv).firstOrNull()?.map(::normalize)?.toSet().orEmpty()
+        val hasSummary = listOf("billid", "date", "paymentmode", "total").all { it in headers }
+        val hasLines = "billid" in headers && "qty" in headers && "unitprice" in headers &&
+            ("sku" in headers || "productname" in headers)
+        return hasSummary && hasLines
+    }
+
     private fun parseSummaries(
         table: List<List<String>>,
         errors: MutableList<SalesImportRowError>,

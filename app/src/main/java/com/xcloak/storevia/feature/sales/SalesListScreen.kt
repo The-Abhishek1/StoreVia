@@ -4,10 +4,12 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ReceiptLong
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.automirrored.filled.ReceiptLong
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -25,6 +27,7 @@ import com.xcloak.storevia.R
 import com.xcloak.storevia.core.database.dao.SaleDao
 import com.xcloak.storevia.core.database.dao.BranchDao
 import com.xcloak.storevia.core.database.entity.SaleEntity
+import com.xcloak.storevia.core.database.entity.SaleStatus
 import com.xcloak.storevia.core.money.Money
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
@@ -49,22 +52,22 @@ class SalesListViewModel @Inject constructor(saleDao: SaleDao, branchDao: Branch
 
     val searchQuery: StateFlow<String> = query.asStateFlow()
     val selectedStatus: StateFlow<SalesStatusFilter> = statusFilter.asStateFlow()
-    val sales: StateFlow<List<SaleEntity>?> = combine(activeBranchId.filterNotNull(), query, statusFilter) { branchId, search, status ->
-        Triple(branchId, search.trim(), status)
-    }.flatMapLatest { (branchId, search, status) ->
-        saleDao.observeRecent(200, branchId).map { rows ->
-            rows.filter { sale ->
-                (search.isEmpty() || sale.invoiceNo.contains(search, ignoreCase = true)) &&
-                    when (status) {
-                        SalesStatusFilter.ALL -> true
-                        SalesStatusFilter.OUTSTANDING -> sale.status != com.xcloak.storevia.core.database.entity.SaleStatus.CANCELLED &&
-                            sale.totalPaise - sale.returnedPaise > sale.paidPaise
-                        SalesStatusFilter.CANCELLED -> sale.status == com.xcloak.storevia.core.database.entity.SaleStatus.CANCELLED
-                    }
-            }
+    val recentSales: StateFlow<List<SaleEntity>?> = activeBranchId.filterNotNull()
+        .flatMapLatest { saleDao.observeRecent(200, it) }
+        .map<List<SaleEntity>, List<SaleEntity>?> { it }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+
+    val sales: StateFlow<List<SaleEntity>?> = combine(recentSales, query, statusFilter) { rows, search, status ->
+        rows?.filter { sale ->
+            (search.isBlank() || sale.invoiceNo.contains(search.trim(), ignoreCase = true)) &&
+                when (status) {
+                    SalesStatusFilter.ALL -> true
+                    SalesStatusFilter.OUTSTANDING -> sale.status != SaleStatus.CANCELLED &&
+                        sale.totalPaise - sale.returnedPaise > sale.paidPaise
+                    SalesStatusFilter.CANCELLED -> sale.status == SaleStatus.CANCELLED
+                }
         }
     }
-        .map<List<SaleEntity>, List<SaleEntity>?> { it }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     fun setSearchQuery(value: String) { query.value = value }
@@ -78,6 +81,7 @@ private val ROW_DATE = DateTimeFormatter.ofPattern("d MMM, h:mm a")
 @Composable
 fun SalesListScreen(onNewSale: () -> Unit, onOpen: (String) -> Unit, vm: SalesListViewModel = hiltViewModel()) {
     val sales by vm.sales.collectAsStateWithLifecycle()
+    val recentSales by vm.recentSales.collectAsStateWithLifecycle()
     val branchName by vm.branchName.collectAsStateWithLifecycle()
     val query by vm.searchQuery.collectAsStateWithLifecycle()
     val status by vm.selectedStatus.collectAsStateWithLifecycle()
@@ -92,21 +96,67 @@ fun SalesListScreen(onNewSale: () -> Unit, onOpen: (String) -> Unit, vm: SalesLi
                 Text(stringResource(R.string.stock_branch_scope, it), Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                     style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
+            val recent = recentSales.orEmpty()
+            val completedSales = recent.filter { it.status != SaleStatus.CANCELLED }
+            Text(
+                stringResource(R.string.sales_recent_summary),
+                Modifier.padding(start = 16.dp, top = 8.dp),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            SalesOverview(
+                billCount = recent.size,
+                collectedPaise = completedSales.sumOf { it.paidPaise },
+                duePaise = completedSales.sumOf { (it.totalPaise - it.returnedPaise - it.paidPaise).coerceAtLeast(0) },
+            )
             OutlinedTextField(
                 value = query,
                 onValueChange = vm::setSearchQuery,
                 singleLine = true,
                 label = { Text(stringResource(R.string.sales_search_hint)) },
+                trailingIcon = {
+                    if (query.isNotEmpty()) {
+                        IconButton(onClick = { vm.setSearchQuery("") }) {
+                            Icon(Icons.Filled.Close, contentDescription = stringResource(R.string.clear))
+                        }
+                    }
+                },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
             )
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                listOf(
-                    SalesStatusFilter.ALL to R.string.sales_filter_all,
-                    SalesStatusFilter.OUTSTANDING to R.string.sales_filter_outstanding,
-                    SalesStatusFilter.CANCELLED to R.string.sales_filter_cancelled,
-                ).forEach { (filter, label) ->
-                    FilterChip(selected = status == filter, onClick = { vm.setStatusFilter(filter) }, label = { Text(stringResource(label)) })
+            LazyRow(
+                contentPadding = PaddingValues(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                item {
+                    FilterChip(
+                        selected = status == SalesStatusFilter.ALL,
+                        onClick = { vm.setStatusFilter(SalesStatusFilter.ALL) },
+                        label = { Text(stringResource(R.string.sales_filter_all_count, recent.size)) },
+                    )
+                }
+                item {
+                    FilterChip(
+                        selected = status == SalesStatusFilter.OUTSTANDING,
+                        onClick = { vm.setStatusFilter(SalesStatusFilter.OUTSTANDING) },
+                        label = {
+                            Text(
+                                stringResource(
+                                    R.string.sales_filter_outstanding_count,
+                                    recent.count { it.status != SaleStatus.CANCELLED && it.totalPaise - it.returnedPaise > it.paidPaise },
+                                )
+                            )
+                        },
+                    )
+                }
+                item {
+                    FilterChip(
+                        selected = status == SalesStatusFilter.CANCELLED,
+                        onClick = { vm.setStatusFilter(SalesStatusFilter.CANCELLED) },
+                        label = {
+                            Text(stringResource(R.string.sales_filter_cancelled_count, recent.count { it.status == SaleStatus.CANCELLED }))
+                        },
+                    )
                 }
             }
             when {
@@ -116,7 +166,7 @@ fun SalesListScreen(onNewSale: () -> Unit, onOpen: (String) -> Unit, vm: SalesLi
                     verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                     if (query.isBlank() && status == SalesStatusFilter.ALL) {
-                        Icon(Icons.Filled.ReceiptLong, contentDescription = null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.primary)
+                        Icon(Icons.AutoMirrored.Filled.ReceiptLong, contentDescription = null, modifier = Modifier.size(48.dp), tint = MaterialTheme.colorScheme.primary)
                         Spacer(Modifier.height(16.dp))
                         Text(stringResource(R.string.sales_empty), style = MaterialTheme.typography.titleLarge)
                         Spacer(Modifier.height(8.dp))
@@ -131,23 +181,68 @@ fun SalesListScreen(onNewSale: () -> Unit, onOpen: (String) -> Unit, vm: SalesLi
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     items(sales.orEmpty(), key = { it.id }) { s ->
-                        val due = s.totalPaise - s.returnedPaise - s.paidPaise
-                        Card(Modifier.fillMaxWidth().clickable { onOpen(s.id) }) {
-                            ListItem(
-                                headlineContent = { Text(Money(s.totalPaise).format(), style = MaterialTheme.typography.titleMedium) },
-                                supportingContent = {
-                                    Text(s.invoiceNo + " · " + Instant.ofEpochMilli(s.createdAt).atZone(ZoneId.systemDefault()).format(ROW_DATE))
-                                },
-                                trailingContent = {
-                                    if (s.status == com.xcloak.storevia.core.database.entity.SaleStatus.CANCELLED) AssistChip(onClick = { onOpen(s.id) }, label = { Text(stringResource(R.string.status_cancelled)) })
-                                    else if (due > 0) AssistChip(onClick = { onOpen(s.id) }, label = { Text(stringResource(R.string.due_chip, Money(due).format())) })
-                                },
-                                colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surface),
-                            )
-                        }
+                        SaleRow(s, onOpen = { onOpen(s.id) })
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun SalesOverview(billCount: Int, collectedPaise: Long, duePaise: Long) {
+    Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 14.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+        ) {
+            SalesMetric(billCount.toString(), stringResource(R.string.sales_metric_bills))
+            SalesMetric(Money(collectedPaise).format(), stringResource(R.string.sales_metric_collected))
+            SalesMetric(Money(duePaise).format(), stringResource(R.string.sales_metric_due))
+        }
+    }
+}
+
+@Composable
+private fun SalesMetric(value: String, label: String) {
+    Column(
+        Modifier.widthIn(max = 120.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(value, style = MaterialTheme.typography.titleMedium, maxLines = 1, overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis)
+        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun SaleRow(sale: SaleEntity, onOpen: () -> Unit) {
+    val due = (sale.totalPaise - sale.returnedPaise - sale.paidPaise).coerceAtLeast(0)
+    val statusText = when {
+        sale.status == SaleStatus.CANCELLED -> stringResource(R.string.status_cancelled)
+        sale.status == SaleStatus.RETURNED -> stringResource(R.string.status_returned)
+        sale.status == SaleStatus.PARTIAL_RETURN -> stringResource(R.string.status_partial_return)
+        due > 0 -> stringResource(R.string.due_chip, Money(due).format())
+        else -> stringResource(R.string.paid)
+    }
+    Card(Modifier.fillMaxWidth().clickable(onClick = onOpen)) {
+        ListItem(
+            headlineContent = { Text(sale.invoiceNo, style = MaterialTheme.typography.titleMedium) },
+            supportingContent = {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(Instant.ofEpochMilli(sale.createdAt).atZone(ZoneId.systemDefault()).format(ROW_DATE))
+                    Text(
+                        stringResource(R.string.sales_received_total, Money(sale.paidPaise).format(), Money(sale.totalPaise).format()),
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            },
+            trailingContent = {
+                Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(Money(sale.totalPaise).format(), style = MaterialTheme.typography.titleSmall)
+                    AssistChip(onClick = onOpen, label = { Text(statusText) })
+                }
+            },
+            colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surface),
+        )
     }
 }

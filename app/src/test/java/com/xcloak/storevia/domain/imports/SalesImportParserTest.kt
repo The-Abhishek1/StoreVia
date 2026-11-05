@@ -8,6 +8,17 @@ import org.junit.Test
 
 class SalesImportParserTest {
     @Test
+    fun detectsCombinedSalesSummaryAndLineItemsCsv() {
+        assertTrue(
+            SalesImportParser.isCombinedFile(
+                "bill_id,date,payment_mode,total,sku,product_name,qty,unit_price\n" +
+                    "DEMO-1,2026-11-04,CASH,45.00,SV-P001,Notebook,1,45.00\n",
+            ),
+        )
+        assertFalse(SalesImportParser.isCombinedFile("bill_id,date,payment_mode,total\nDEMO-1,2026-11-04,CASH,45.00\n"))
+    }
+
+    @Test
     fun parsesLinkedSummaryAndLineFilesWithAliases() {
         val result = SalesImportParser.parse(
             "Bill ID,Date,Customer,Payment Mode,Discount,Tax,Total\n" +

@@ -106,12 +106,8 @@ class ProductEditViewModel @Inject constructor(
                     update { copy(unitId = (list.firstOrNull { it.symbol == "pcs" } ?: list.first()).id) }
             }
         }
-        // "barcode" is set either by the nav argument (Add with this barcode) or by the scanner screen.
-        viewModelScope.launch {
-            handle.getStateFlow<String?>("barcode", null).filterNotNull().collect {
-                if (it.isNotBlank()) update { copy(barcode = it) }
-                handle["barcode"] = null
-            }
+        handle.get<String>("barcode")?.takeIf { it.isNotBlank() }?.let { barcode ->
+            update { copy(barcode = barcode) }
         }
         when {
             productId != null -> viewModelScope.launch { load(productId) }
@@ -159,6 +155,9 @@ class ProductEditViewModel @Inject constructor(
     }
 
     fun update(block: EditForm.() -> EditForm) = _ui.update { it.copy(form = it.form.block(), errors = emptyMap()) }
+    fun setBarcode(barcode: String) {
+        if (barcode.isNotBlank()) update { copy(barcode = barcode) }
+    }
     fun updateAttribute(key: String, value: String) = update {
         copy(attributes = attributes + (key to value))
     }

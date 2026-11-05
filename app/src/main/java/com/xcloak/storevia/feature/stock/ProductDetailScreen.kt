@@ -46,6 +46,7 @@ fun ProductDetailScreen(
     onEdit: (String) -> Unit,
     onAddVariant: (String) -> Unit,
     onOpenVariant: (String) -> Unit,
+    startQuickAdjust: Boolean = false,
     vm: ProductDetailViewModel = hiltViewModel(),
 ) {
     val ui by vm.ui.collectAsStateWithLifecycle()
@@ -57,6 +58,12 @@ fun ProductDetailScreen(
     val canEdit = can(Permission.MANAGE_PRODUCTS)
     val canReceive = can(Permission.MANAGE_PURCHASES)
     val d = ui
+
+    LaunchedEffect(d?.product?.id, startQuickAdjust) {
+        if (startQuickAdjust && canAdjust) {
+            d?.batches?.firstOrNull()?.let { adjusting = it }
+        }
+    }
 
     Column(Modifier.fillMaxSize()) {
         TopAppBar(

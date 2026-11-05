@@ -40,7 +40,7 @@ import com.xcloak.storevia.feature.stock.FieldError
 @Composable
 fun CheckoutScreen(
     onBack: () -> Unit,
-    onScan: () -> Unit,
+    onScan: (onResult: (String) -> Unit) -> Unit,
     onCreateProduct: (String) -> Unit,
     onCompleted: (String) -> Unit,
     vm: CheckoutViewModel = hiltViewModel(),
@@ -83,7 +83,7 @@ fun CheckoutScreen(
         OutlinedTextField(
             value = ui.query, onValueChange = vm::setQuery, singleLine = true,
             placeholder = { Text(stringResource(R.string.search_to_add)) },
-            trailingIcon = { IconButton(onClick = onScan) { Icon(Icons.Filled.QrCodeScanner, stringResource(R.string.scan_barcode)) } },
+            trailingIcon = { IconButton(onClick = { onScan(vm::onBarcodeScanned) }) { Icon(Icons.Filled.QrCodeScanner, stringResource(R.string.scan_barcode)) } },
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
         )
 

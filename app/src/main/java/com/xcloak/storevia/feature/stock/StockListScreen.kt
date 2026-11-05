@@ -11,6 +11,9 @@ import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
@@ -25,12 +28,15 @@ import com.xcloak.storevia.core.database.dao.ProductListRow
 import com.xcloak.storevia.core.money.Money
 import com.xcloak.storevia.core.util.Parsing
 
+private enum class StockFilter { ALL, LOW, OUT }
+
 @Composable
 fun StockListScreen(
     onAdd: () -> Unit,
     onAddWithBarcode: (String) -> Unit,
     onOpen: (String) -> Unit,
-    onScan: () -> Unit,
+    onQuickAdjust: (String) -> Unit,
+    onScan: (onResult: (String) -> Unit) -> Unit,
     vm: StockListViewModel = hiltViewModel(),
 ) {
     val rows by vm.rows.collectAsStateWithLifecycle()
@@ -38,6 +44,8 @@ fun StockListScreen(
     val categories by vm.categories.collectAsStateWithLifecycle()
     val selectedCategory by vm.category.collectAsStateWithLifecycle()
     val activeBranchName by vm.activeBranchName.collectAsStateWithLifecycle()
+    var stockFilter by remember { mutableStateOf(StockFilter.ALL) }
+    val canAdjust = can(Permission.ADJUST_STOCK)
 
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
@@ -51,7 +59,7 @@ fun StockListScreen(
                 value = query, onValueChange = vm::setQuery, singleLine = true,
                 placeholder = { Text(stringResource(R.string.stock_search_hint)) },
                 trailingIcon = {
-                    IconButton(onClick = onScan) {
+                    IconButton(onClick = { onScan(vm::onBarcodeScanned) }) {
                         Icon(Icons.Filled.QrCodeScanner, contentDescription = stringResource(R.string.scan_barcode))
                     }
                 },
@@ -67,6 +75,22 @@ fun StockListScreen(
                 )
             }
 
+            val allRows = rows.orEmpty()
+            val lowStockCount = allRows.count { it.onHandMilli > 0 && it.minStockMilli > 0 && it.onHandMilli < it.minStockMilli }
+            val outOfStockCount = allRows.count { it.onHandMilli <= 0 }
+            StockOverview(
+                productCount = allRows.size,
+                lowStockCount = lowStockCount,
+                outOfStockCount = outOfStockCount,
+            )
+            StockFilters(
+                selected = stockFilter,
+                productCount = allRows.size,
+                lowStockCount = lowStockCount,
+                outOfStockCount = outOfStockCount,
+                onSelected = { stockFilter = it },
+            )
+
             if (categories.isNotEmpty()) {
                 androidx.compose.foundation.lazy.LazyRow(
                     contentPadding = PaddingValues(horizontal = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -76,15 +100,38 @@ fun StockListScreen(
                 }
                 Spacer(Modifier.height(8.dp))
             }
-            val list = rows
+            val list = when (stockFilter) {
+                StockFilter.ALL -> rows
+                StockFilter.LOW -> rows?.filter {
+                    it.onHandMilli > 0 && it.minStockMilli > 0 && it.onHandMilli < it.minStockMilli
+                }
+                StockFilter.OUT -> rows?.filter { it.onHandMilli <= 0 }
+            }
+            val openProduct = { productId: String ->
+                vm.setQuery("")
+                onOpen(productId)
+            }
+            val addProductWithBarcode = { barcode: String ->
+                vm.setQuery("")
+                onAddWithBarcode(barcode)
+            }
             when {
                 list == null -> LoadingState(Modifier.weight(1f).fillMaxWidth())
-                list.isEmpty() -> EmptyState(query.trim(), can(Permission.MANAGE_PRODUCTS), onAddWithBarcode)
+                list.isEmpty() && rows.orEmpty().isNotEmpty() -> FilterEmptyState { stockFilter = StockFilter.ALL }
+                list.isEmpty() -> EmptyState(query.trim(), can(Permission.MANAGE_PRODUCTS), addProductWithBarcode)
                 else -> LazyColumn(
                     contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 112.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    items(list, key = { it.id }) { row -> ProductRow(row) { onOpen(row.id) } }
+                    items(list, key = { it.id }) {
+                        row ->
+                        ProductRow(
+                            row,
+                            canAdjust,
+                            onOpen = { openProduct(row.id) },
+                            onQuickAdjust = { onQuickAdjust(row.id) },
+                        )
+                    }
                 }
             }
         }
@@ -92,8 +139,71 @@ fun StockListScreen(
 }
 
 @Composable
-private fun ProductRow(row: ProductListRow, onClick: () -> Unit) {
-    Card(Modifier.fillMaxWidth().clickable(onClick = onClick)) {
+private fun StockOverview(productCount: Int, lowStockCount: Int, outOfStockCount: Int) {
+    Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 14.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+        ) {
+            StockMetric(productCount, stringResource(R.string.stock_metric_products))
+            StockMetric(lowStockCount, stringResource(R.string.stock_metric_low))
+            StockMetric(outOfStockCount, stringResource(R.string.stock_metric_out))
+        }
+    }
+}
+
+@Composable
+private fun StockMetric(value: Int, label: String) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(value.toString(), style = MaterialTheme.typography.titleLarge)
+        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun StockFilters(
+    selected: StockFilter,
+    productCount: Int,
+    lowStockCount: Int,
+    outOfStockCount: Int,
+    onSelected: (StockFilter) -> Unit,
+) {
+    androidx.compose.foundation.lazy.LazyRow(
+        contentPadding = PaddingValues(horizontal = 16.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        item {
+            FilterChip(
+                selected == StockFilter.ALL,
+                { onSelected(StockFilter.ALL) },
+                { Text(stringResource(R.string.stock_filter_all, productCount)) },
+            )
+        }
+        item {
+            FilterChip(
+                selected == StockFilter.LOW,
+                { onSelected(StockFilter.LOW) },
+                { Text(stringResource(R.string.stock_filter_low, lowStockCount)) },
+            )
+        }
+        item {
+            FilterChip(
+                selected == StockFilter.OUT,
+                { onSelected(StockFilter.OUT) },
+                { Text(stringResource(R.string.stock_filter_out, outOfStockCount)) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun ProductRow(
+    row: ProductListRow,
+    canAdjust: Boolean,
+    onOpen: () -> Unit,
+    onQuickAdjust: () -> Unit,
+) {
+    Card(Modifier.fillMaxWidth().clickable(onClick = onOpen)) {
         ListItem(
             headlineContent = {
                 Text(
@@ -112,14 +222,34 @@ private fun ProductRow(row: ProductListRow, onClick: () -> Unit) {
                 )
             },
             trailingContent = {
-                when {
-                    row.onHandMilli <= 0 -> AssistChip(onClick = onClick, label = { Text(stringResource(R.string.out_of_stock)) })
-                    row.minStockMilli > 0 && row.onHandMilli < row.minStockMilli ->
-                        AssistChip(onClick = onClick, label = { Text(stringResource(R.string.low)) })
+                Column(horizontalAlignment = Alignment.End) {
+                    when {
+                        row.onHandMilli <= 0 -> AssistChip(onClick = onOpen, label = { Text(stringResource(R.string.out_of_stock)) })
+                        row.minStockMilli > 0 && row.onHandMilli < row.minStockMilli ->
+                            AssistChip(onClick = onOpen, label = { Text(stringResource(R.string.low)) })
+                    }
+                    if (canAdjust && row.onHandMilli > 0) {
+                        TextButton(onClick = onQuickAdjust, contentPadding = PaddingValues(horizontal = 8.dp)) {
+                            Text(stringResource(R.string.adjust_stock))
+                        }
+                    }
                 }
             },
             colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surface),
         )
+    }
+}
+
+@Composable
+private fun FilterEmptyState(onShowAll: () -> Unit) {
+    Column(
+        Modifier.fillMaxSize().padding(32.dp),
+        verticalArrangement = Arrangement.Center,
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(stringResource(R.string.stock_filter_empty), style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(12.dp))
+        TextButton(onClick = onShowAll) { Text(stringResource(R.string.stock_filter_show_all)) }
     }
 }
 

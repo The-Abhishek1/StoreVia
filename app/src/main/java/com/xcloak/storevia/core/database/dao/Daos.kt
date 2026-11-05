@@ -375,6 +375,7 @@ interface CustomerDao {
 }
 
 data class DaySummary(val totalPaise: Long, val count: Int)
+data class DailySalesSummary(val day: String, val totalPaise: Long, val count: Int)
 
 @Dao
 interface SaleDao {
@@ -420,6 +421,14 @@ interface SaleDao {
     @Query("""SELECT COALESCE(SUM(totalPaise),0) AS totalPaise, COUNT(*) AS count FROM sales
               WHERE status != 'CANCELLED' AND branchId = :branchId AND createdAt >= :fromMillis AND createdAt < :toMillis""")
     fun observeSummary(fromMillis: Long, toMillis: Long, branchId: String = "default"): Flow<DaySummary>
+
+    @Query("""SELECT strftime('%Y-%m-%d', createdAt / 1000, 'unixepoch', 'localtime') AS day,
+                     COALESCE(SUM(totalPaise), 0) AS totalPaise, COUNT(*) AS count
+              FROM sales
+              WHERE status != 'CANCELLED' AND branchId = :branchId
+                AND createdAt >= :fromMillis AND createdAt < :toMillis
+              GROUP BY day ORDER BY day""")
+    fun observeDailySummaries(fromMillis: Long, toMillis: Long, branchId: String): Flow<List<DailySalesSummary>>
 }
 
 @Dao

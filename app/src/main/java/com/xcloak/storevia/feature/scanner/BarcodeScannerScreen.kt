@@ -4,6 +4,7 @@ import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.CameraSelector
@@ -33,6 +34,7 @@ import com.google.mlkit.vision.common.InputImage
 import com.xcloak.storevia.R
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -41,6 +43,7 @@ fun BarcodeScannerScreen(onResult: (String) -> Unit, onBack: () -> Unit) {
     var granted by remember {
         mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
     }
+    var scannerError by remember { mutableStateOf(false) }
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted = it }
     LaunchedEffect(Unit) { if (!granted) launcher.launch(Manifest.permission.CAMERA) }
 
@@ -54,11 +57,16 @@ fun BarcodeScannerScreen(onResult: (String) -> Unit, onBack: () -> Unit) {
             },
         )
         if (granted) {
-            CameraPreview(onResult, Modifier.weight(1f).fillMaxWidth())
+            CameraPreview(
+                onResult = onResult,
+                onError = { scannerError = true },
+                modifier = Modifier.weight(1f).fillMaxWidth(),
+            )
             Text(
-                stringResource(R.string.scanning_hint),
+                stringResource(if (scannerError) R.string.scanner_error else R.string.scanning_hint),
                 style = MaterialTheme.typography.bodyLarge,
                 modifier = Modifier.fillMaxWidth().padding(16.dp),
+                color = if (scannerError) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
             )
         } else {
             Column(
@@ -77,13 +85,21 @@ fun BarcodeScannerScreen(onResult: (String) -> Unit, onBack: () -> Unit) {
 }
 
 @Composable
-private fun CameraPreview(onResult: (String) -> Unit, modifier: Modifier) {
+private fun CameraPreview(onResult: (String) -> Unit, onError: () -> Unit, modifier: Modifier) {
     val lifecycleOwner = LocalLifecycleOwner.current
     val executor = remember { Executors.newSingleThreadExecutor() }
     val done = remember { AtomicBoolean(false) }
+    val errorReported = remember { AtomicBoolean(false) }
+    val analyzerRef = remember { AtomicReference<BarcodeAnalyzer?>(null) }
     val currentOnResult by rememberUpdatedState(onResult)
+    val currentOnError by rememberUpdatedState(onError)
 
-    DisposableEffect(Unit) { onDispose { executor.shutdown() } }
+    DisposableEffect(Unit) {
+        onDispose {
+            analyzerRef.getAndSet(null)?.close()
+            executor.shutdown()
+        }
+    }
 
     AndroidView(
         modifier = modifier,
@@ -91,39 +107,73 @@ private fun CameraPreview(onResult: (String) -> Unit, modifier: Modifier) {
             val previewView = PreviewView(ctx)
             val providerFuture = ProcessCameraProvider.getInstance(ctx)
             providerFuture.addListener({
-                val provider = providerFuture.get()
-                val preview = Preview.Builder().build().also { it.surfaceProvider = previewView.surfaceProvider }
-                val analysis = ImageAnalysis.Builder()
-                    .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                    .build()
-                analysis.setAnalyzer(executor, BarcodeAnalyzer { value ->
-                    // Deliver exactly one result, on the main thread.
-                    if (done.compareAndSet(false, true)) Handler(Looper.getMainLooper()).post { currentOnResult(value) }
-                })
-                provider.unbindAll()
-                provider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
+                try {
+                    val provider = providerFuture.get()
+                    val preview = Preview.Builder().build().also { it.surfaceProvider = previewView.surfaceProvider }
+                    val analysis = ImageAnalysis.Builder()
+                        .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                        .build()
+                    val analyzer = BarcodeAnalyzer(
+                        onFound = { value ->
+                            if (done.compareAndSet(false, true)) {
+                                Handler(Looper.getMainLooper()).post { currentOnResult(value) }
+                            }
+                        },
+                        onFailure = { error ->
+                            Log.e(TAG, "Barcode frame could not be analyzed", error)
+                            if (errorReported.compareAndSet(false, true)) {
+                                Handler(Looper.getMainLooper()).post { currentOnError() }
+                            }
+                        },
+                    )
+                    analyzerRef.set(analyzer)
+                    analysis.setAnalyzer(executor, analyzer)
+                    provider.unbindAll()
+                    provider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_BACK_CAMERA, preview, analysis)
+                } catch (error: Exception) {
+                    Log.e(TAG, "Could not start the barcode camera", error)
+                    currentOnError()
+                }
             }, ContextCompat.getMainExecutor(ctx))
             previewView
         },
     )
 }
 
-private class BarcodeAnalyzer(private val onFound: (String) -> Unit) : ImageAnalysis.Analyzer {
+private class BarcodeAnalyzer(
+    private val onFound: (String) -> Unit,
+    private val onFailure: (Exception) -> Unit,
+) : ImageAnalysis.Analyzer {
     private val scanner = BarcodeScanning.getClient(
         BarcodeScannerOptions.Builder()
             .setBarcodeFormats(
                 Barcode.FORMAT_EAN_13, Barcode.FORMAT_EAN_8, Barcode.FORMAT_UPC_A, Barcode.FORMAT_UPC_E,
-                Barcode.FORMAT_CODE_128, Barcode.FORMAT_CODE_39, Barcode.FORMAT_QR_CODE,
+                Barcode.FORMAT_CODE_128, Barcode.FORMAT_CODE_39, Barcode.FORMAT_CODE_93,
+                Barcode.FORMAT_CODABAR, Barcode.FORMAT_ITF, Barcode.FORMAT_QR_CODE,
+                Barcode.FORMAT_DATA_MATRIX, Barcode.FORMAT_PDF417, Barcode.FORMAT_AZTEC,
             ).build()
     )
 
     @OptIn(ExperimentalGetImage::class)
     override fun analyze(proxy: ImageProxy) {
-        val media = proxy.image
-        if (media == null) { proxy.close(); return }
-        val image = InputImage.fromMediaImage(media, proxy.imageInfo.rotationDegrees)
-        scanner.process(image)
-            .addOnSuccessListener { list -> list.firstNotNullOfOrNull { it.rawValue }?.let(onFound) }
-            .addOnCompleteListener { proxy.close() }
+        try {
+            val media = proxy.image
+            if (media == null) {
+                proxy.close()
+                return
+            }
+            val image = InputImage.fromMediaImage(media, proxy.imageInfo.rotationDegrees)
+            scanner.process(image)
+                .addOnSuccessListener { list -> list.firstNotNullOfOrNull { it.rawValue?.takeIf(String::isNotBlank) }?.let(onFound) }
+                .addOnFailureListener { error -> onFailure(error) }
+                .addOnCompleteListener { proxy.close() }
+        } catch (error: Exception) {
+            proxy.close()
+            onFailure(error)
+        }
     }
+
+    fun close() = scanner.close()
 }
+
+private const val TAG = "BarcodeScanner"

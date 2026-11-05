@@ -19,6 +19,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xcloak.storevia.R
+import com.xcloak.storevia.core.access.Permission
 import com.xcloak.storevia.core.access.Role
 import com.xcloak.storevia.core.database.entity.StaffEntity
 import com.xcloak.storevia.core.ui.LoadingState
@@ -42,6 +43,7 @@ fun StaffScreen(onBack: () -> Unit, vm: StaffViewModel = hiltViewModel()) {
     val staffMode by vm.staffMode.collectAsStateWithLifecycle()
     val actor by vm.actor.collectAsStateWithLifecycle()
     val settings by vm.settings.collectAsStateWithLifecycle()
+    val canManageStaff = actor.can(Permission.MANAGE_STAFF)
     var enabling by remember { mutableStateOf(false) }
     var adding by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<StaffEntity?>(null) }
@@ -55,7 +57,7 @@ fun StaffScreen(onBack: () -> Unit, vm: StaffViewModel = hiltViewModel()) {
             )
         },
         floatingActionButton = {
-            if (staffMode) ExtendedFloatingActionButton(onClick = { adding = true }, icon = { Icon(Icons.Filled.PersonAdd, null) }, text = { Text(stringResource(R.string.add_staff)) })
+            if (staffMode && canManageStaff) ExtendedFloatingActionButton(onClick = { adding = true }, icon = { Icon(Icons.Filled.PersonAdd, null) }, text = { Text(stringResource(R.string.add_staff)) })
         },
     ) { padding ->
         LazyColumn(Modifier.padding(padding), contentPadding = PaddingValues(16.dp, 8.dp, 16.dp, 96.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -69,24 +71,65 @@ fun StaffScreen(onBack: () -> Unit, vm: StaffViewModel = hiltViewModel()) {
                 }
             } else {
                 item {
-                    Text(stringResource(R.string.signed_in_as, actor.name, roleLabel(actor.role)), style = MaterialTheme.typography.bodyMedium)
-                    OutlinedButton(onClick = vm::switchUser) { Text(stringResource(R.string.switch_user)) }
-                    HorizontalDivider(Modifier.padding(vertical = 8.dp))
-                    Text(stringResource(R.string.cashier_rules), style = MaterialTheme.typography.titleSmall)
-                    SwitchRow(stringResource(R.string.cashier_discount), settings.cashierCanDiscount, vm::setCashierDiscount)
-                    SwitchRow(stringResource(R.string.cashier_credit), settings.cashierCanSellOnCredit, vm::setCashierCredit)
-                    SwitchRow(stringResource(R.string.cashier_batch_override), settings.cashierCanOverrideBatch, vm::setCashierBatchOverride)
-                    HorizontalDivider(Modifier.padding(vertical = 8.dp))
-                    Text(stringResource(R.string.staff_list), style = MaterialTheme.typography.titleSmall)
+                    Card(Modifier.fillMaxWidth()) {
+                        Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(stringResource(R.string.staff_signed_in_heading), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(stringResource(R.string.signed_in_as, actor.name, roleLabel(actor.role)), style = MaterialTheme.typography.titleMedium)
+                            OutlinedButton(onClick = vm::switchUser) { Text(stringResource(R.string.switch_user)) }
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text(stringResource(R.string.staff_roles_heading), style = MaterialTheme.typography.titleMedium)
+                    Spacer(Modifier.height(4.dp))
+                    RoleGuideCard(Role.OWNER)
+                    Spacer(Modifier.height(8.dp))
+                    RoleGuideCard(Role.MANAGER)
+                    Spacer(Modifier.height(8.dp))
+                    RoleGuideCard(Role.CASHIER)
+                    Spacer(Modifier.height(8.dp))
+                    if (canManageStaff) {
+                        Card(Modifier.fillMaxWidth()) {
+                            Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Text(stringResource(R.string.cashier_rules), style = MaterialTheme.typography.titleMedium)
+                                Text(stringResource(R.string.cashier_rules_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                SwitchRow(stringResource(R.string.cashier_discount), stringResource(R.string.cashier_discount_hint), settings.cashierCanDiscount, vm::setCashierDiscount)
+                                HorizontalDivider()
+                                SwitchRow(stringResource(R.string.cashier_credit), stringResource(R.string.cashier_credit_hint), settings.cashierCanSellOnCredit, vm::setCashierCredit)
+                                HorizontalDivider()
+                                SwitchRow(stringResource(R.string.cashier_batch_override), stringResource(R.string.cashier_batch_override_hint), settings.cashierCanOverrideBatch, vm::setCashierBatchOverride)
+                            }
+                        }
+                    } else {
+                        Text(stringResource(R.string.staff_cashier_options_owner_only), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(stringResource(R.string.staff_list), style = MaterialTheme.typography.titleMedium)
+                            Text(stringResource(R.string.staff_list_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
                 }
                 if (staff == null) {
                     item { LoadingState(Modifier.fillMaxWidth().height(180.dp)) }
                 } else {
                     items(staff.orEmpty(), key = { it.id }) { s ->
                         ListItem(
-                            modifier = Modifier.clickable { editing = s },
+                            modifier = if (canManageStaff) Modifier.clickable { editing = s } else Modifier,
                             headlineContent = { Text(s.name, style = MaterialTheme.typography.titleMedium) },
-                            supportingContent = { Text(roleLabel(s.role) + if (!s.isActive) " · " + stringResource(R.string.staff_inactive) else "") },
+                            supportingContent = {
+                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Text(roleLabel(s.role) + " · " + stringResource(roleDescription(s.role)))
+                                    Text(
+                                        stringResource(if (s.isActive) R.string.staff_active else R.string.staff_inactive),
+                                        color = if (s.isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                                        style = MaterialTheme.typography.labelSmall,
+                                    )
+                                }
+                            },
+                            trailingContent = if (canManageStaff) {
+                                { Text(stringResource(R.string.staff_edit_action), color = MaterialTheme.colorScheme.primary) }
+                            } else null,
                         )
                         HorizontalDivider()
                     }
@@ -104,9 +147,33 @@ fun StaffScreen(onBack: () -> Unit, vm: StaffViewModel = hiltViewModel()) {
 }
 
 @Composable
-private fun SwitchRow(label: String, checked: Boolean, onChange: (Boolean) -> Unit) {
-    Row(verticalAlignment = Alignment.CenterVertically) {
-        Text(label, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+private fun RoleGuideCard(role: Role) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(roleLabel(role), style = MaterialTheme.typography.titleSmall)
+            Text(
+                stringResource(roleDescription(role)),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+private fun roleDescription(role: Role): Int = when (role) {
+    Role.OWNER -> R.string.staff_role_owner_description
+    Role.MANAGER -> R.string.staff_role_manager_description
+    Role.CASHIER -> R.string.staff_role_cashier_description
+    Role.PLATFORM_ADMIN -> R.string.role_platform_admin
+}
+
+@Composable
+private fun SwitchRow(label: String, hint: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
+        Column(Modifier.weight(1f).padding(end = 12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text(label, style = MaterialTheme.typography.bodyMedium)
+            Text(hint, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         Switch(checked = checked, onCheckedChange = onChange)
     }
 }
@@ -136,8 +203,12 @@ private fun PinFormDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(name, { name = it; error = null }, singleLine = true, label = { Text(stringResource(nameLabel)) })
-                if (askRole) FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf(Role.CASHIER, Role.MANAGER).forEach { r -> FilterChip(role == r, { role = r }, { Text(roleLabel(r)) }) }
+                if (askRole) {
+                    Text(stringResource(R.string.staff_choose_role), style = MaterialTheme.typography.labelLarge)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf(Role.CASHIER, Role.MANAGER).forEach { r -> FilterChip(role == r, { role = r }, { Text(roleLabel(r)) }) }
+                    }
+                    Text(stringResource(roleDescription(role)), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 PinField(pin, { pin = it; error = null }, R.string.field_pin)
                 PinField(again, { again = it; error = null }, R.string.field_pin_again)
@@ -172,11 +243,17 @@ private fun EditStaffDialog(s: StaffEntity, vm: StaffViewModel, onDismiss: () ->
                 OutlinedTextField(name, { name = it; error = null }, singleLine = true, label = { Text(stringResource(R.string.field_staff_name)) })
                 if (isOwner) Text(roleLabel(Role.OWNER), style = MaterialTheme.typography.bodyMedium)
                 else {
+                    Text(stringResource(R.string.staff_choose_role), style = MaterialTheme.typography.labelLarge)
                     FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         listOf(Role.CASHIER, Role.MANAGER).forEach { r -> FilterChip(role == r, { role = r }, { Text(roleLabel(r)) }) }
                     }
+                    Text(stringResource(roleDescription(role)), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        Text(stringResource(R.string.staff_active), Modifier.weight(1f)); Switch(active, { active = it })
+                        Column(Modifier.weight(1f)) {
+                            Text(stringResource(if (active) R.string.staff_active else R.string.staff_inactive))
+                            Text(stringResource(R.string.staff_active_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        Switch(active, { active = it })
                     }
                 }
                 Text(stringResource(R.string.staff_new_pin_hint), style = MaterialTheme.typography.labelMedium)

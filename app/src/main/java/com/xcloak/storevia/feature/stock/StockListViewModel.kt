@@ -1,6 +1,5 @@
 package com.xcloak.storevia.feature.stock
 
-import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.xcloak.storevia.core.database.dao.CategoryDao
@@ -21,7 +20,6 @@ class StockListViewModel @Inject constructor(
     productDao: ProductDao,
     categoryDao: CategoryDao,
     branchDao: BranchDao,
-    private val handle: SavedStateHandle,
 ) : ViewModel() {
 
     private val _query = MutableStateFlow("")
@@ -47,20 +45,16 @@ class StockListViewModel @Inject constructor(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     init {
-        // The scanner screen writes its result into this entry's SavedStateHandle under "barcode".
-        viewModelScope.launch {
-            handle.getStateFlow<String?>("barcode", null).filterNotNull().collect {
-                _query.value = it
-                _category.value = null
-                handle["barcode"] = null
-            }
-        }
-        // A deleted category can't stay selected.
         viewModelScope.launch {
             categoryDao.observeAll().collect { list -> if (_category.value != null && list.none { it.id == _category.value }) _category.value = null }
         }
     }
 
     fun setQuery(q: String) { _query.value = q }
+    fun onBarcodeScanned(barcode: String) {
+        if (barcode.isBlank()) return
+        _query.value = barcode
+        _category.value = null
+    }
     fun setCategory(id: String?) { _category.value = id }
 }

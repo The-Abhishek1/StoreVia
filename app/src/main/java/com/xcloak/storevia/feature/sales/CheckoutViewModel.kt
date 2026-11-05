@@ -153,14 +153,6 @@ class CheckoutViewModel @Inject constructor(
     private val cartSerializer = ListSerializer(CartLine.serializer())
 
     init {
-        // Barcode handed back by the scanner screen.
-        viewModelScope.launch {
-            handle.getStateFlow<String?>("barcode", null).filterNotNull().collect { code ->
-                handle["barcode"] = null
-                val p = productDao.findByBarcode(code)
-                if (p != null) addProduct(p.id) else _ui.update { it.copy(unknownBarcode = code, message = null) }
-            }
-        }
         viewModelScope.launch {
             handle.getStateFlow<String?>("createdProductId", null).filterNotNull().collect { id ->
                 handle["createdProductId"] = null
@@ -170,6 +162,14 @@ class CheckoutViewModel @Inject constructor(
     }
 
     fun setQuery(q: String) = _ui.update { it.copy(query = q) }
+    fun onBarcodeScanned(code: String) {
+        if (code.isBlank()) return
+        viewModelScope.launch {
+            val product = productDao.findByBarcode(code)
+            if (product != null) addProduct(product.id)
+            else _ui.update { it.copy(unknownBarcode = code, message = null) }
+        }
+    }
 
     /** Any change to what is being bought resets how it is paid (so a stale amount can't leave a wrong khata balance). */
     private fun changeCart(transform: (List<CartLine>) -> List<CartLine>) {

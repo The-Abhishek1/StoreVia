@@ -21,6 +21,8 @@ import javax.inject.Inject
 data class HomeState(
     val todaySalesPaise: Long = 0,
     val todayCount: Int = 0,
+    val weeklySales: List<HomeDaySales> = emptyList(),
+    val previousWeekSalesPaise: Long = 0,
     val productCount: Int = 0,
     val lowStockCount: Int = 0,
     val expiringCount: Int = 0,
@@ -28,11 +30,13 @@ data class HomeState(
     val expiryWarnDays: Int = 30,
 )
 
+data class HomeDaySales(val day: LocalDate, val totalPaise: Long)
+
 private data class DashboardQuery(
     val branchId: String,
     val expiryWarnDays: Int,
-    val salesFrom: Long,
     val salesTo: Long,
+    val chartFrom: Long,
     val expiryFrom: LocalDate,
     val expiryTo: LocalDate,
 )
@@ -84,8 +88,8 @@ class HomeViewModel @Inject constructor(
         DashboardQuery(
             branchId = branchId,
             expiryWarnDays = expiryDays,
-            salesFrom = today.atStartOfDay(zone).toInstant().toEpochMilli(),
             salesTo = today.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli(),
+            chartFrom = today.minusDays(13).atStartOfDay(zone).toInstant().toEpochMilli(),
             expiryFrom = today,
             expiryTo = today.plusDays(expiryDays.toLong()),
         )
@@ -93,15 +97,26 @@ class HomeViewModel @Inject constructor(
 
     val state: StateFlow<HomeState> = dashboardQuery.flatMapLatest { query ->
         combine(
-            saleDao.observeSummary(query.salesFrom, query.salesTo, query.branchId),
+            saleDao.observeDailySummaries(query.chartFrom, query.salesTo, query.branchId),
             productDao.observeCount(),
             batchDao.observeLowStock(query.branchId).map { it.size },
             batchDao.observeExpiringCount(query.expiryFrom, query.expiryTo, query.branchId),
             customerDao.observeTotalDue(),
         ) { sales, products, lowStock, expiring, khataDue ->
+            val salesByDay = sales.associateBy { LocalDate.parse(it.day) }
+            val weeklySales = (6L downTo 0L).map { offset ->
+                val day = LocalDate.now(zone).minusDays(offset)
+                HomeDaySales(day, salesByDay[day]?.totalPaise ?: 0L)
+            }
+            val previousWeekTotal = (13L downTo 7L).sumOf { offset ->
+                salesByDay[LocalDate.now(zone).minusDays(offset)]?.totalPaise ?: 0L
+            }
+            val today = salesByDay[LocalDate.now(zone)]
             HomeState(
-                todaySalesPaise = sales.totalPaise,
-                todayCount = sales.count,
+                todaySalesPaise = today?.totalPaise ?: 0L,
+                todayCount = today?.count ?: 0,
+                weeklySales = weeklySales,
+                previousWeekSalesPaise = previousWeekTotal,
                 productCount = products,
                 lowStockCount = lowStock,
                 expiringCount = expiring,

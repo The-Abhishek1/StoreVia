@@ -111,13 +111,17 @@ class MainActivity : ComponentActivity() {
                 val needsLogin by session.needsLogin.collectAsStateWithLifecycle()
                 var entryRoute by rememberSaveable { mutableStateOf(EntryRoute.WELCOME) }
                 val authenticated = authStatus is SessionStatus.Authenticated
+                var authStatusResolved by rememberSaveable { mutableStateOf(false) }
                 var platformAdminCheckComplete by rememberSaveable { mutableStateOf(false) }
                 var platformAdminSession by rememberSaveable { mutableStateOf(false) }
                 var existingStoreConnectionError by rememberSaveable { mutableStateOf<String?>(null) }
 
                 androidx.compose.runtime.LaunchedEffect(authStatus) {
+                    if (authStatus !is SessionStatus.Initializing) authStatusResolved = true
+                }
+
+                androidx.compose.runtime.LaunchedEffect(authenticated) {
                     if (authenticated) {
-                        platformAdminCheckComplete = false
                         val isPlatformAdmin = cloudAccount.isPlatformAdmin()
                         platformAdminSession = isPlatformAdmin
                         when {
@@ -158,7 +162,7 @@ class MainActivity : ComponentActivity() {
                     !platformAdminSession &&
                     entryRoute != EntryRoute.ADMIN_AUTH &&
                     entryRoute != EntryRoute.ADMIN_PORTAL &&
-                    (settings.localOnlyMode || (authenticated && settings.cloudStoreId != null))
+                    (settings.localOnlyMode || settings.cloudStoreId != null)
                 val leaveAdmin: () -> Unit = {
                     lifecycleScope.launch {
                         cloudAccount.signOut()
@@ -173,7 +177,7 @@ class MainActivity : ComponentActivity() {
                     ) {
                     Box(Modifier.fillMaxSize()) {
                         when {
-                            authStatus is SessionStatus.Initializing -> CircularProgressIndicator(Modifier.align(Alignment.Center))
+                            authStatus is SessionStatus.Initializing && !authStatusResolved -> CircularProgressIndicator(Modifier.align(Alignment.Center))
                             authenticated && !platformAdminCheckComplete -> CircularProgressIndicator(Modifier.align(Alignment.Center))
                             showRetailApp -> {
                                 StoreviaNavHost(

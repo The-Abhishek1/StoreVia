@@ -3,6 +3,7 @@ package com.xcloak.storevia.feature.data
 import com.xcloak.storevia.core.access.*
 import android.content.Context
 import android.net.Uri
+import android.util.Log
 import androidx.annotation.StringRes
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -15,12 +16,14 @@ import com.xcloak.storevia.data.export.ExportFormat
 import com.xcloak.storevia.data.cloud.CloudAccountRepository
 import com.xcloak.storevia.domain.imports.*
 import com.xcloak.storevia.domain.imports.SalesImportStockMode
+import io.github.jan.supabase.auth.status.SessionStatus
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import javax.inject.Inject
 
 data class PendingImport(
@@ -106,13 +109,23 @@ class ImportExportViewModel @Inject constructor(
         _ui.update { it.copy(busy = true) }
         val bytes = try {
             withContext(Dispatchers.IO) { context.contentResolver.openInputStream(uri)?.use { readCapped(it) } }
-        } catch (_: Exception) { null }
-        if (bytes == null) { _ui.update { it.copy(busy = false, message = R.string.import_too_big) }; return@launch }
-
-        val table = Csv.parse(bytes.toString(Charsets.UTF_8))
-        val parse = ProductCsvParser.parse(table, unitDao.observeAll().first())
-        val preview = importer.preview(parse.rows)
-        _ui.update { it.copy(busy = false, pending = PendingImport(parse, preview)) }
+        } catch (error: Exception) {
+            Log.e(TAG, "Could not read the selected product CSV", error)
+            null
+        }
+        if (bytes == null) {
+            _ui.update { it.copy(busy = false, message = R.string.import_read_failed) }
+            return@launch
+        }
+        try {
+            val table = Csv.parse(bytes.toString(Charsets.UTF_8))
+            val parse = ProductCsvParser.parse(table, unitDao.observeAll().first())
+            val preview = importer.preview(parse.rows)
+            _ui.update { it.copy(busy = false, pending = PendingImport(parse, preview)) }
+        } catch (error: Exception) {
+            Log.e(TAG, "Could not prepare the selected product CSV", error)
+            _ui.update { it.copy(busy = false, message = R.string.import_preview_failed) }
+        }
     }
 
     fun readSalesSummary(uri: Uri) = readSalesCsv(uri, summary = true)
@@ -128,15 +141,23 @@ class ImportExportViewModel @Inject constructor(
         _ui.update { it.copy(busy = true) }
         val bytes = try {
             withContext(Dispatchers.IO) { context.contentResolver.openInputStream(uri)?.use { readCapped(it) } }
-        } catch (_: Exception) {
+        } catch (error: Exception) {
+            Log.e(TAG, "Could not read the selected sales CSV", error)
             null
         }
         if (bytes == null) {
-            _ui.update { it.copy(busy = false, message = R.string.import_too_big) }
+            _ui.update { it.copy(busy = false, message = R.string.import_read_failed) }
             return@launch
         }
         val text = bytes.toString(Charsets.UTF_8)
-        if (summary) salesSummaryCsv = text else salesLinesCsv = text
+        if (SalesImportParser.isCombinedFile(text)) {
+            salesSummaryCsv = text
+            salesLinesCsv = text
+        } else if (summary) {
+            salesSummaryCsv = text
+        } else {
+            salesLinesCsv = text
+        }
         _ui.update {
             it.copy(
                 busy = false,
@@ -156,20 +177,25 @@ class ImportExportViewModel @Inject constructor(
         }
         if (!checkProAccess()) return@launch
         _ui.update { it.copy(busy = true) }
-        val document = SalesImportParser.parse(summaryCsv, linesCsv, salesPaymentsCsv)
-        val validation = salesImporter.validate(document)
-        _ui.update {
-            it.copy(
-                busy = false,
-                pendingSales = PendingSalesImport(document, validation),
-                salesSummarySelected = false,
-                salesLinesSelected = false,
-                salesPaymentsSelected = false,
-            )
+        try {
+            val document = SalesImportParser.parse(summaryCsv, linesCsv, salesPaymentsCsv)
+            val validation = salesImporter.validate(document)
+            _ui.update {
+                it.copy(
+                    busy = false,
+                    pendingSales = PendingSalesImport(document, validation),
+                    salesSummarySelected = false,
+                    salesLinesSelected = false,
+                    salesPaymentsSelected = false,
+                )
+            }
+            salesSummaryCsv = null
+            salesLinesCsv = null
+            salesPaymentsCsv = null
+        } catch (error: Exception) {
+            Log.e(TAG, "Could not prepare the selected sales CSV files", error)
+            _ui.update { it.copy(busy = false, message = R.string.sales_import_failed) }
         }
-        salesSummaryCsv = null
-        salesLinesCsv = null
-        salesPaymentsCsv = null
     }
 
     private fun readSalesPaymentsCsv(uri: Uri) = viewModelScope.launch {
@@ -181,11 +207,12 @@ class ImportExportViewModel @Inject constructor(
         _ui.update { it.copy(busy = true) }
         val bytes = try {
             withContext(Dispatchers.IO) { context.contentResolver.openInputStream(uri)?.use { readCapped(it) } }
-        } catch (_: Exception) {
+        } catch (error: Exception) {
+            Log.e(TAG, "Could not read the selected sales payments CSV", error)
             null
         }
         if (bytes == null) {
-            _ui.update { it.copy(busy = false, message = R.string.import_too_big) }
+            _ui.update { it.copy(busy = false, message = R.string.import_read_failed) }
             return@launch
         }
         salesPaymentsCsv = bytes.toString(Charsets.UTF_8)
@@ -223,6 +250,9 @@ class ImportExportViewModel @Inject constructor(
                 _ui.update { it.copy(busy = false, pendingSales = pending.copy(validation = validation)) }
             } catch (_: PermissionDeniedException) {
                 _ui.update { it.copy(busy = false, message = R.string.err_permission_denied) }
+            } catch (error: Exception) {
+                Log.e(TAG, "Could not import sales CSV", error)
+                _ui.update { it.copy(busy = false, pendingSales = pending, message = R.string.sales_import_failed) }
             }
         }
     }
@@ -243,17 +273,29 @@ class ImportExportViewModel @Inject constructor(
                 _ui.update { it.copy(busy = false, message = R.string.import_result, messageArgs = listOf(s.created, s.updated, s.skipped)) }
             } catch (e: PermissionDeniedException) {
                 _ui.update { it.copy(busy = false, message = R.string.err_permission_denied) }
+            } catch (error: Exception) {
+                Log.e(TAG, "Could not import product CSV", error)
+                _ui.update { it.copy(busy = false, pending = p, message = R.string.import_failed) }
             }
         }
     }
 
     private suspend fun checkProAccess(): Boolean {
         return try {
-            val plan = cloud.planSnapshot()
+            var plan = cloud.planSnapshot()
+            if (plan == null && !cloud.hasSignedInSession()) {
+                val restored = withTimeoutOrNull(5_000) {
+                    cloud.authSessionStatus.first {
+                        it is SessionStatus.Authenticated && cloud.hasSignedInSession()
+                    }
+                }
+                if (restored != null) plan = cloud.planSnapshot()
+            }
             val enabled = plan?.plan.equals("pro", ignoreCase = true) && plan?.status.equals("active", ignoreCase = true)
             _ui.update { it.copy(proAccessChecked = true, proAccessEnabled = enabled, proAccessError = null) }
             enabled
         } catch (error: Exception) {
+            Log.e(TAG, "Could not check Pro access", error)
             _ui.update {
                 it.copy(
                     proAccessChecked = true,
@@ -278,5 +320,9 @@ class ImportExportViewModel @Inject constructor(
             out.write(buf, 0, n)
         }
         return out.toByteArray()
+    }
+
+    private companion object {
+        const val TAG = "ImportExport"
     }
 }

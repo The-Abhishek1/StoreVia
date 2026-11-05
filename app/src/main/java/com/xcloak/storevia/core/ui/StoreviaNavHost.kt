@@ -7,6 +7,9 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -57,7 +60,7 @@ private object Routes {
     const val SALES = "sales"
     const val REPORTS = "reports"
     const val MORE = "more"
-    const val PRODUCT = "product/{id}"
+    const val PRODUCT = "product/{id}?quickAdjust={quickAdjust}"
     const val EDIT = "product_edit?id={id}&barcode={barcode}&parentId={parentId}"
     const val SCANNER = "scanner"
     const val CHECKOUT = "checkout"
@@ -81,7 +84,8 @@ private object Routes {
     const val CLOUD_ACCOUNT = "cloud_account"
     const val CUSTOMER = "customer/{id}"
 
-    fun product(id: String) = "product/$id"
+    fun product(id: String, quickAdjust: Boolean = false) =
+        "product/$id" + if (quickAdjust) "?quickAdjust=true" else ""
     fun sale(id: String) = "sale/$id"
     fun saleReturn(id: String) = "sale/$id/return"
     fun customer(id: String) = "customer/$id"
@@ -115,6 +119,12 @@ fun StoreviaNavHost(localOnly: Boolean = false, onExitLocalOnly: () -> Unit = {}
     val actor = LocalActor.current
     val tabs = Tab.entries.filter { it != Tab.Reports || actor.can(Permission.VIEW_REPORTS) }
     val showBottomBar = tabs.any { it.route == route }
+    var scannerResult by remember { mutableStateOf<((String) -> Unit)?>(null) }
+
+    fun openScanner(onResult: (String) -> Unit) {
+        scannerResult = onResult
+        nav.navigate(Routes.SCANNER)
+    }
 
     Scaffold(
         topBar = {
@@ -172,6 +182,11 @@ fun StoreviaNavHost(localOnly: Boolean = false, onExitLocalOnly: () -> Unit = {}
             composable(Routes.HOME) {
                 HomeScreen(
                     onNewSale = { nav.navigate(Routes.CHECKOUT) },
+                    onAddProduct = { nav.navigate(Routes.edit()) },
+                    onViewSales = { nav.navigate(Routes.SALES) },
+                    onViewStock = { nav.navigate(Routes.STOCK) },
+                    onCustomers = { nav.navigate(Routes.CUSTOMERS) },
+                    onReorder = { nav.navigate(Routes.REORDER) },
                     onSetupStore = { nav.navigate(Routes.STORE_SETTINGS) },
                     onOnboarding = { nav.navigate(Routes.ONBOARDING) },
                 )
@@ -182,16 +197,24 @@ fun StoreviaNavHost(localOnly: Boolean = false, onExitLocalOnly: () -> Unit = {}
                     onAdd = { nav.navigate(Routes.edit()) },
                     onAddWithBarcode = { nav.navigate(Routes.edit(barcode = it)) },
                     onOpen = { nav.navigate(Routes.product(it)) },
-                    onScan = { nav.navigate(Routes.SCANNER) },
+                    onQuickAdjust = { nav.navigate(Routes.product(it, quickAdjust = true)) },
+                    onScan = ::openScanner,
                 )
             }
 
-            composable(Routes.PRODUCT, arguments = listOf(navArgument("id") { type = NavType.StringType })) {
+            composable(
+                Routes.PRODUCT,
+                arguments = listOf(
+                    navArgument("id") { type = NavType.StringType },
+                    navArgument("quickAdjust") { type = NavType.BoolType; defaultValue = false },
+                ),
+            ) { entry ->
                 ProductDetailScreen(
                     onBack = { nav.popBackStack() },
                     onEdit = { nav.navigate(Routes.edit(id = it)) },
                     onAddVariant = { nav.navigate(Routes.edit(parentId = it)) },
                     onOpenVariant = { nav.navigate(Routes.product(it)) },
+                    startQuickAdjust = entry.arguments?.getBoolean("quickAdjust") ?: false,
                 )
             }
 
@@ -205,7 +228,7 @@ fun StoreviaNavHost(localOnly: Boolean = false, onExitLocalOnly: () -> Unit = {}
             ) { entry ->
                 ProductEditScreen(
                     onBack = { nav.popBackStack() },
-                    onScan = { nav.navigate(Routes.SCANNER) },
+                    onScan = ::openScanner,
                     onSaved = { id ->
                         if (entry.arguments?.getString("parentId") != null) {
                             nav.popBackStack()
@@ -232,11 +255,15 @@ fun StoreviaNavHost(localOnly: Boolean = false, onExitLocalOnly: () -> Unit = {}
             composable(Routes.SCANNER) {
                 BarcodeScannerScreen(
                     onResult = { code ->
-                        // Hand the result to the screen that opened the scanner, then close.
-                        nav.previousBackStackEntry?.savedStateHandle?.set("barcode", code)
+                        val deliverResult = scannerResult
+                        scannerResult = null
+                        deliverResult?.invoke(code)
                         nav.popBackStack()
                     },
-                    onBack = { nav.popBackStack() },
+                    onBack = {
+                        scannerResult = null
+                        nav.popBackStack()
+                    },
                 )
             }
 
@@ -247,7 +274,7 @@ fun StoreviaNavHost(localOnly: Boolean = false, onExitLocalOnly: () -> Unit = {}
             composable(Routes.CHECKOUT) {
                 CheckoutScreen(
                     onBack = { nav.popBackStack() },
-                    onScan = { nav.navigate(Routes.SCANNER) },
+                    onScan = ::openScanner,
                     onCreateProduct = { barcode -> nav.navigate(Routes.edit(barcode = barcode)) },
                     onCompleted = { id ->
                         nav.navigate(Routes.sale(id)) { popUpTo(Routes.CHECKOUT) { inclusive = true } }

@@ -8,6 +8,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
@@ -32,6 +33,15 @@ fun ReportsScreen(vm: ReportsViewModel = hiltViewModel()) {
     var showEndPicker by remember { mutableStateOf(false) }
     var draftStart by remember { mutableStateOf<LocalDate?>(null) }
     var invalidRange by remember { mutableStateOf(false) }
+    var showBusinessFilters by rememberSaveable { mutableStateOf(false) }
+    val activeEntityFilters = listOf(
+        ui.filters.branchId,
+        ui.filters.productId,
+        ui.filters.categoryId,
+        ui.filters.customerId,
+        ui.filters.taxRateBp?.toString(),
+        ui.filters.supplierId,
+    ).count { it != null }
 
     LazyColumn(
         contentPadding = PaddingValues(16.dp),
@@ -61,7 +71,7 @@ fun ReportsScreen(vm: ReportsViewModel = hiltViewModel()) {
             if (invalidRange) Text(stringResource(R.string.report_invalid_date_range), color = MaterialTheme.colorScheme.error)
         }
         item {
-            Text(stringResource(R.string.report_payment_filter), style = MaterialTheme.typography.labelLarge)
+            Text(stringResource(R.string.report_payment_filter), style = MaterialTheme.typography.titleSmall)
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 FilterChip(
                     selected = ui.paymentMethod == null,
@@ -78,68 +88,87 @@ fun ReportsScreen(vm: ReportsViewModel = hiltViewModel()) {
             }
         }
         item {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(stringResource(R.string.report_entity_filters), style = MaterialTheme.typography.titleSmall)
-                TextButton(
-                    onClick = {
-                        vm.setProductFilter(null)
-                        vm.setCategoryFilter(null)
-                        vm.setCustomerFilter(null)
-                        vm.setTaxRateFilter(null)
-                        vm.setSupplierFilter(null)
-                        vm.setBranchFilter(null)
-                    },
-                    enabled = ui.filters != ReportFilters(),
-                ) { Text(stringResource(R.string.report_clear_filters)) }
-            }
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                ReportFilterDropdown(
-                    label = stringResource(R.string.report_filter_branch),
-                    allLabel = stringResource(R.string.report_filter_all_branches),
-                    selectedId = ui.filters.branchId,
-                    options = ui.filterOptions.branches,
-                    onSelect = vm::setBranchFilter,
-                )
-                ReportFilterDropdown(
-                    label = stringResource(R.string.report_filter_product),
-                    allLabel = stringResource(R.string.report_filter_all),
-                    selectedId = ui.filters.productId,
-                    options = ui.filterOptions.products,
-                    onSelect = vm::setProductFilter,
-                )
-                ReportFilterDropdown(
-                    label = stringResource(R.string.report_filter_category),
-                    allLabel = stringResource(R.string.report_filter_all),
-                    selectedId = ui.filters.categoryId,
-                    options = ui.filterOptions.categories,
-                    onSelect = vm::setCategoryFilter,
-                )
-                ReportFilterDropdown(
-                    label = stringResource(R.string.report_filter_customer),
-                    allLabel = stringResource(R.string.report_filter_all),
-                    selectedId = ui.filters.customerId,
-                    options = ui.filterOptions.customers,
-                    onSelect = vm::setCustomerFilter,
-                )
-                ReportFilterDropdown(
-                    label = stringResource(R.string.report_filter_tax),
-                    allLabel = stringResource(R.string.report_filter_all),
-                    selectedId = ui.filters.taxRateBp?.toString(),
-                    options = ui.filterOptions.taxRatesBp.map {
-                        ReportFilterOption(
-                            it.toString(),
-                            stringResource(R.string.report_tax_rate, taxRateLabel(it)),
+            Card(Modifier.fillMaxWidth()) {
+                Column(Modifier.fillMaxWidth().padding(12.dp)) {
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                    ) {
+                        TextButton(onClick = { showBusinessFilters = !showBusinessFilters }) {
+                            Text(
+                                if (activeEntityFilters == 0) stringResource(R.string.report_entity_filters)
+                                else stringResource(R.string.report_entity_filters_count, activeEntityFilters),
+                            )
+                        }
+                        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                            if (activeEntityFilters > 0) {
+                                TextButton(
+                                    onClick = {
+                                        vm.setProductFilter(null)
+                                        vm.setCategoryFilter(null)
+                                        vm.setCustomerFilter(null)
+                                        vm.setTaxRateFilter(null)
+                                        vm.setSupplierFilter(null)
+                                        vm.setBranchFilter(null)
+                                    },
+                                ) { Text(stringResource(R.string.report_clear_filters)) }
+                            }
+                            TextButton(onClick = { showBusinessFilters = !showBusinessFilters }) {
+                                Text(stringResource(if (showBusinessFilters) R.string.report_filters_done else R.string.report_filters_edit))
+                            }
+                        }
+                    }
+                    if (showBusinessFilters) Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ReportFilterDropdown(
+                            label = stringResource(R.string.report_filter_branch),
+                            allLabel = stringResource(R.string.report_filter_all_branches),
+                            selectedId = ui.filters.branchId,
+                            options = ui.filterOptions.branches,
+                            onSelect = vm::setBranchFilter,
                         )
-                    },
-                    onSelect = { vm.setTaxRateFilter(it?.toIntOrNull()) },
-                )
-                ReportFilterDropdown(
-                    label = stringResource(R.string.report_filter_supplier),
-                    allLabel = stringResource(R.string.report_filter_all),
-                    selectedId = ui.filters.supplierId,
-                    options = ui.filterOptions.suppliers,
-                    onSelect = vm::setSupplierFilter,
-                )
+                        ReportFilterDropdown(
+                            label = stringResource(R.string.report_filter_product),
+                            allLabel = stringResource(R.string.report_filter_all),
+                            selectedId = ui.filters.productId,
+                            options = ui.filterOptions.products,
+                            onSelect = vm::setProductFilter,
+                        )
+                        ReportFilterDropdown(
+                            label = stringResource(R.string.report_filter_category),
+                            allLabel = stringResource(R.string.report_filter_all),
+                            selectedId = ui.filters.categoryId,
+                            options = ui.filterOptions.categories,
+                            onSelect = vm::setCategoryFilter,
+                        )
+                        ReportFilterDropdown(
+                            label = stringResource(R.string.report_filter_customer),
+                            allLabel = stringResource(R.string.report_filter_all),
+                            selectedId = ui.filters.customerId,
+                            options = ui.filterOptions.customers,
+                            onSelect = vm::setCustomerFilter,
+                        )
+                        ReportFilterDropdown(
+                            label = stringResource(R.string.report_filter_tax),
+                            allLabel = stringResource(R.string.report_filter_all),
+                            selectedId = ui.filters.taxRateBp?.toString(),
+                            options = ui.filterOptions.taxRatesBp.map {
+                                ReportFilterOption(
+                                    it.toString(),
+                                    stringResource(R.string.report_tax_rate, taxRateLabel(it)),
+                                )
+                            },
+                            onSelect = { vm.setTaxRateFilter(it?.toIntOrNull()) },
+                        )
+                        ReportFilterDropdown(
+                            label = stringResource(R.string.report_filter_supplier),
+                            allLabel = stringResource(R.string.report_filter_all),
+                            selectedId = ui.filters.supplierId,
+                            options = ui.filterOptions.suppliers,
+                            onSelect = vm::setSupplierFilter,
+                        )
+                    }
+                }
             }
         }
         item {
@@ -178,7 +207,11 @@ fun ReportsScreen(vm: ReportsViewModel = hiltViewModel()) {
         if (ui.payments.isEmpty()) item { Text(stringResource(R.string.no_payments), style = MaterialTheme.typography.bodyMedium) }
         else items(ui.payments.size) { i ->
             val p = ui.payments[i]
-            Line(stringResource(methodLabel(p.method)), Money(p.totalPaise).format())
+            PaymentBreakdown(
+                label = stringResource(methodLabel(p.method)),
+                amountPaise = p.totalPaise,
+                totalPaise = ui.payments.sumOf { it.totalPaise },
+            )
         }
 
         item { Section(R.string.report_supplier_purchases) }
@@ -193,7 +226,12 @@ fun ReportsScreen(vm: ReportsViewModel = hiltViewModel()) {
         if (ui.top.isEmpty()) item { Text(stringResource(R.string.no_sales_period), style = MaterialTheme.typography.bodyMedium) }
         else items(ui.top.size) { i ->
             val t = ui.top[i]
-            Line("${t.name} · ${Parsing.milliToInput(t.qtyMilli)} ${t.unitSymbol}".trim(), Money(t.revenuePaise).format())
+            TopProductRow(
+                rank = i + 1,
+                label = "${t.name} · ${Parsing.milliToInput(t.qtyMilli)} ${t.unitSymbol}".trim(),
+                revenuePaise = t.revenuePaise,
+                maxRevenuePaise = ui.top.first().revenuePaise,
+            )
         }
 
         val st = ui.stock
@@ -306,6 +344,53 @@ private fun methodLabel(m: PaymentMethod) = when (m) {
 @Composable
 private fun Section(title: Int) {
     Text(stringResource(title), style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(top = 8.dp))
+}
+
+@Composable
+private fun PaymentBreakdown(label: String, amountPaise: Long, totalPaise: Long) {
+    val fraction = if (totalPaise > 0) (amountPaise.toFloat() / totalPaise).coerceIn(0f, 1f) else 0f
+    Card(Modifier.fillMaxWidth()) {
+        Column(
+            Modifier.fillMaxWidth().padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(label, style = MaterialTheme.typography.bodyMedium)
+                Text(Money(amountPaise).format(), style = MaterialTheme.typography.titleSmall)
+            }
+            LinearProgressIndicator(
+                progress = { fraction },
+                modifier = Modifier.fillMaxWidth(),
+                trackColor = MaterialTheme.colorScheme.surfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun TopProductRow(rank: Int, label: String, revenuePaise: Long, maxRevenuePaise: Long) {
+    val fraction = if (maxRevenuePaise > 0) (revenuePaise.toFloat() / maxRevenuePaise).coerceIn(0f, 1f) else 0f
+    Card(Modifier.fillMaxWidth()) {
+        Column(
+            Modifier.fillMaxWidth().padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            ) {
+                Text(rank.toString(), style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
+                Text(label, Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                Text(Money(revenuePaise).format(), style = MaterialTheme.typography.titleSmall)
+            }
+            LinearProgressIndicator(
+                progress = { fraction },
+                modifier = Modifier.fillMaxWidth(),
+                trackColor = MaterialTheme.colorScheme.surfaceVariant,
+            )
+        }
+    }
 }
 
 @Composable

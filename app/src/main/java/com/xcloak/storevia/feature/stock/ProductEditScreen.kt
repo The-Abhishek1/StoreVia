@@ -25,7 +25,7 @@ private val GST_RATES = listOf(0, 500, 1200, 1800, 2800)
 @Composable
 fun ProductEditScreen(
     onBack: () -> Unit,
-    onScan: () -> Unit,
+    onScan: (onResult: (String) -> Unit) -> Unit,
     onSaved: (String) -> Unit,
     onArchived: () -> Unit,
     vm: ProductEditViewModel = hiltViewModel(),
@@ -81,7 +81,7 @@ fun ProductEditScreen(
             Field(
                 f.barcode, { v -> vm.update { copy(barcode = v) } }, R.string.field_barcode, errText(ui.errors["barcode"]),
                 trailing = {
-                    IconButton(onClick = onScan) { Icon(Icons.Filled.QrCodeScanner, stringResource(R.string.scan_barcode)) }
+                    IconButton(onClick = { onScan(vm::setBarcode) }) { Icon(Icons.Filled.QrCodeScanner, stringResource(R.string.scan_barcode)) }
                 },
             )
             Dropdown(
