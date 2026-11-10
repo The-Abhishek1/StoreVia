@@ -9,6 +9,8 @@ import com.xcloak.storevia.core.database.dao.StockMovementDao
 import com.xcloak.storevia.core.database.dao.activeBranchId
 import com.xcloak.storevia.core.database.entity.MovementType
 import com.xcloak.storevia.core.database.entity.StockMovementEntity
+import com.xcloak.storevia.domain.sale.LocalSalesInventoryOperations
+import com.xcloak.storevia.domain.sale.SalesInventoryOperations
 import javax.inject.Inject
 
 class StockAdjustException(val reason: Reason) : Exception(reason.name) {
@@ -22,6 +24,7 @@ class AdjustStockUseCase @Inject constructor(
     private val stockDao: StockMovementDao,
     private val access: Access = OwnerAccess,
     private val audit: AuditSink = NoAudit,
+    private val cloudOperations: SalesInventoryOperations = LocalSalesInventoryOperations,
 ) {
     private val allowed = setOf(MovementType.DAMAGE, MovementType.EXPIRED, MovementType.ADJUSTMENT_IN, MovementType.ADJUSTMENT_OUT)
 
@@ -35,6 +38,10 @@ class AdjustStockUseCase @Inject constructor(
         access.require(Permission.ADJUST_STOCK)
         if (type !in allowed) throw StockAdjustException(StockAdjustException.Reason.INVALID_TYPE)
         if (qtyMilli <= 0) throw StockAdjustException(StockAdjustException.Reason.INVALID_QTY)
+        if (cloudOperations.isCloudMode()) {
+            cloudOperations.adjustStock(batchId, type, qtyMilli, note?.trim()?.ifEmpty { null }, now)
+            return
+        }
 
         db.withTransaction {
             val branchId = db.branchDao().activeBranchId()

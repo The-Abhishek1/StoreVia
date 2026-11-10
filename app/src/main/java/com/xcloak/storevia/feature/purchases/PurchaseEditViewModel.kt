@@ -6,11 +6,9 @@ import androidx.lifecycle.viewModelScope
 import com.xcloak.storevia.R
 import com.xcloak.storevia.core.access.Permission
 import com.xcloak.storevia.core.access.StaffSession
-import com.xcloak.storevia.core.database.dao.ProductDao
 import com.xcloak.storevia.core.database.dao.ProductListRow
 import com.xcloak.storevia.core.database.dao.BranchDao
 import com.xcloak.storevia.core.database.dao.SupplierDao
-import com.xcloak.storevia.core.database.dao.UnitDao
 import com.xcloak.storevia.core.database.dao.observeActiveBranchId
 import com.xcloak.storevia.core.database.entity.PaymentMethod
 import com.xcloak.storevia.core.database.entity.SupplierEntity
@@ -20,6 +18,11 @@ import com.xcloak.storevia.core.store.StoreTypeConfig
 import com.xcloak.storevia.core.util.Parsing
 import com.xcloak.storevia.core.util.PackUnit
 import com.xcloak.storevia.data.prefs.AppPrefs
+import com.xcloak.storevia.data.prefs.StorageMode
+import com.xcloak.storevia.data.prefs.StorageModeRouter
+import com.xcloak.storevia.data.cloud.CloudPartyRepository
+import com.xcloak.storevia.data.cloud.CloudPurchaseRepository
+import com.xcloak.storevia.data.product.ProductCatalogRepository
 import com.xcloak.storevia.domain.purchase.PurchaseException
 import com.xcloak.storevia.domain.purchase.PurchaseItem
 import com.xcloak.storevia.domain.purchase.RecordPurchaseUseCase
@@ -28,6 +31,7 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.time.LocalDate
 import java.time.ZoneId
@@ -91,13 +95,14 @@ sealed interface PurchaseEvent { data class Saved(val purchaseId: String) : Purc
 @HiltViewModel
 class PurchaseEditViewModel @Inject constructor(
     private val handle: SavedStateHandle,
-    private val productDao: ProductDao,
-    private val unitDao: UnitDao,
     private val supplierDao: SupplierDao,
     branchDao: BranchDao,
     private val recordPurchase: RecordPurchaseUseCase,
-    prefs: AppPrefs,
+    private val prefs: AppPrefs,
     private val session: StaffSession,
+    private val catalog: ProductCatalogRepository,
+    private val cloudParties: CloudPartyRepository,
+    private val cloudPurchases: CloudPurchaseRepository,
 ) : ViewModel() {
 
     private val _ui = MutableStateFlow(PurchaseUi())
@@ -113,10 +118,21 @@ class PurchaseEditViewModel @Inject constructor(
     val events = _events.receiveAsFlow()
 
     val suppliers: StateFlow<List<SupplierEntity>> = canManage
-        .flatMapLatest { allowed -> if (allowed) supplierDao.observeAll() else flowOf(emptyList<SupplierEntity>()) }
+        .flatMapLatest { allowed ->
+            if (!allowed) flowOf(emptyList())
+            else StorageModeRouter.observe(
+                prefs.settings.map { it.storageMode },
+                local = { supplierDao.observeAll() },
+                cloud = { cloudPurchases.observeSuppliers() },
+            )
+        }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    private val activeBranchId = branchDao.observeActiveBranchId()
+    private val activeBranchId = StorageModeRouter.observe(
+        prefs.settings.map { it.storageMode },
+        local = { branchDao.observeActiveBranchId() },
+        cloud = { cloudPurchases.observeBranchId() },
+    )
 
     val results: StateFlow<List<ProductListRow>> = combine(
         _ui.map { it.query.trim() }.distinctUntilChanged(),
@@ -125,7 +141,7 @@ class PurchaseEditViewModel @Inject constructor(
     ) { q, branchId, allowed -> SearchFilter(q, branchId, allowed) }
         .flatMapLatest { filter ->
             if (filter.query.isEmpty() || filter.branchId == null || !filter.allowed) flowOf(emptyList<ProductListRow>())
-            else productDao.listWithStock(filter.query, filter.branchId).map { it.take(8) }
+            else catalog.observeStockRows(filter.query, null, filter.branchId).map { it.take(8) }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
@@ -133,12 +149,18 @@ class PurchaseEditViewModel @Inject constructor(
 
 
     init {
-        handle.get<String>("supplierId")?.let { id -> viewModelScope.launch { supplierDao.getById(id)?.let { s -> _ui.update { it.copy(supplier = s) } } } }
+        handle.get<String>("supplierId")?.let { id ->
+            viewModelScope.launch {
+                val supplier = if (prefs.settings.value.storageMode == StorageMode.CLOUD) cloudPurchases.getSupplier(id)
+                else supplierDao.getById(id)
+                supplier?.let { s -> _ui.update { it.copy(supplier = s) } }
+            }
+        }
         // Barcode handed back by the scanner screen.
         viewModelScope.launch {
             handle.getStateFlow<String?>("barcode", null).filterNotNull().collect { code ->
                 handle["barcode"] = null
-                val p = productDao.findByBarcode(code)
+                val p = catalog.observeActiveProducts().first().firstOrNull { catalog.getBarcode(it.id) == code }
                 if (p != null) addProduct(p.id) else _ui.update { it.copy(message = FieldError(R.string.err_barcode_not_found, code)) }
             }
         }
@@ -161,14 +183,23 @@ class PurchaseEditViewModel @Inject constructor(
     fun addSupplier(name: String) {
         if (!canManage.value || name.isBlank()) return
         viewModelScope.launch {
-            val s = SupplierEntity(name = name.trim()); supplierDao.insert(s); setSupplier(s)
+            val s = SupplierEntity(name = name.trim())
+            try {
+                if (prefs.settings.value.storageMode == StorageMode.CLOUD) cloudParties.createSupplier(s)
+                else supplierDao.insert(s)
+                setSupplier(s)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _ui.update { it.copy(message = FieldError(R.string.err_generic, e.message ?: "")) }
+            }
         }
     }
 
     fun addProduct(productId: String) = viewModelScope.launch {
         if (!canManage.value) return@launch
-        val p = productDao.getById(productId) ?: return@launch
-        val unit = unitDao.getById(p.unitId)
+        val p = catalog.getProduct(productId) ?: return@launch
+        val unit = catalog.observeUnits().first().firstOrNull { it.id == p.unitId }
         val pack = try {
             PackUnit.fromAttributesJson(p.attributesJson)
         } catch (_: IllegalArgumentException) {
@@ -262,6 +293,10 @@ class PurchaseEditViewModel @Inject constructor(
                 }
             } catch (e: com.xcloak.storevia.core.access.PermissionDeniedException) {
                 fail(R.string.err_permission_denied)
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                fail(R.string.err_generic, e.message ?: "")
             }
         }
     }

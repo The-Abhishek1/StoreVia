@@ -6,6 +6,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.LazyColumn
@@ -13,6 +14,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Cloud
@@ -21,6 +23,7 @@ import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.WorkspacePremium
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.FilterChip
@@ -34,9 +37,11 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -47,9 +52,9 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xcloak.storevia.R
-import java.time.format.DateTimeParseException
 import java.text.DateFormat
 import java.time.Instant
+import java.time.format.DateTimeParseException
 import java.util.Date
 
 private enum class AccountFilter { ALL, PRO, FREE, ACTIVE, INACTIVE, UNLINKED }
@@ -66,28 +71,28 @@ fun PlatformAdminScreen(
     var filter by rememberSaveable { mutableStateOf(AccountFilter.ALL) }
     val accounts = ui.overview?.accounts.orEmpty()
     val proCount = accounts.count { account ->
-        account.subscriptions.any { it.plan.equals("pro", ignoreCase = true) && it.status.equals("active", ignoreCase = true) }
+        account.subscriptions.any { it.hasActiveProAccess() }
     }
     val freeCount = accounts.count { account ->
-        account.subscriptions.any { !it.plan.equals("pro", ignoreCase = true) && it.status.equals("active", ignoreCase = true) }
+        account.subscriptions.any { !it.plan.equals("pro", ignoreCase = true) && it.isActiveAt() }
     }
-    val activeCount = accounts.count { account -> account.subscriptions.any { it.status.equals("active", ignoreCase = true) } }
-    val inactiveCount = accounts.count { account -> account.subscriptions.any { !it.status.equals("active", ignoreCase = true) } }
-    val linkedCount = accounts.count { it.subscriptions.isNotEmpty() }
+    val activeCount = accounts.count { account -> account.subscriptions.any { it.isActiveAt() } }
+    val inactiveCount = accounts.count { account -> account.subscriptions.any { !it.isActiveAt() } }
+    val linkedCount = accounts.count { it.storeMembershipCount > 0 }
     val normalizedQuery = query.trim()
     val filteredAccounts = accounts.filter { account ->
         val matchesQuery = normalizedQuery.isEmpty() || account.email.contains(normalizedQuery, ignoreCase = true)
         val matchesFilter = when (filter) {
             AccountFilter.ALL -> true
             AccountFilter.PRO -> account.subscriptions.any {
-                it.plan.equals("pro", ignoreCase = true) && it.status.equals("active", ignoreCase = true)
+                it.hasActiveProAccess()
             }
             AccountFilter.FREE -> account.subscriptions.any {
-                !it.plan.equals("pro", ignoreCase = true) && it.status.equals("active", ignoreCase = true)
+                !it.plan.equals("pro", ignoreCase = true) && it.isActiveAt()
             }
-            AccountFilter.ACTIVE -> account.subscriptions.any { it.status.equals("active", ignoreCase = true) }
-            AccountFilter.INACTIVE -> account.subscriptions.any { !it.status.equals("active", ignoreCase = true) }
-            AccountFilter.UNLINKED -> account.subscriptions.isEmpty()
+            AccountFilter.ACTIVE -> account.subscriptions.any { it.isActiveAt() }
+            AccountFilter.INACTIVE -> account.subscriptions.any { !it.isActiveAt() }
+            AccountFilter.UNLINKED -> account.storeMembershipCount == 0
         }
         matchesQuery && matchesFilter
     }
@@ -212,7 +217,13 @@ fun PlatformAdminScreen(
                     }
                 } else {
                     items(filteredAccounts, key = { it.userId }) { account ->
-                        AccountCard(account = account, busy = ui.busy, onSetPlan = vm::setPlan)
+                        AccountCard(
+                            account = account,
+                            busy = ui.busy,
+                            onSetPlan = vm::setPlan,
+                            onDeleteAccount = { vm.previewDeletion("account", it) },
+                            onDeleteStore = { vm.previewDeletion("store", it) },
+                        )
                     }
                 }
             }
@@ -229,6 +240,54 @@ fun PlatformAdminScreen(
                 }
             }
         }
+    }
+    ui.deletionPreview?.let { preview ->
+        AlertDialog(
+            onDismissRequest = { if (!ui.busy) vm.dismissDeletion() },
+            title = { Text(stringResource(R.string.platform_admin_delete_title, preview.targetName)) },
+            text = {
+                Column(
+                    Modifier.fillMaxWidth().heightIn(max = 440.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(stringResource(R.string.platform_admin_delete_impact, preview.totalRows))
+                    Text(stringResource(R.string.platform_admin_delete_users, preview.users.size), style = MaterialTheme.typography.titleSmall)
+                    preview.users.forEach { member ->
+                        Text(member.email.ifBlank { member.userId }, style = MaterialTheme.typography.bodySmall)
+                    }
+                    Text(stringResource(R.string.platform_admin_delete_stores, preview.stores.size), style = MaterialTheme.typography.titleSmall)
+                    preview.stores.forEach { store ->
+                        Text("${store.name} (${store.storeId})", style = MaterialTheme.typography.bodySmall)
+                    }
+                    Text(stringResource(R.string.platform_admin_delete_backups, preview.cloudBackupCount))
+                    if (preview.rowCounts.isNotEmpty()) {
+                        Text(stringResource(R.string.platform_admin_delete_record_breakdown), style = MaterialTheme.typography.titleSmall)
+                        preview.rowCounts.toSortedMap().forEach { (table, count) ->
+                            Text("$table: $count", style = MaterialTheme.typography.bodySmall)
+                        }
+                    }
+                    Text(stringResource(R.string.platform_admin_delete_confirm_hint, preview.confirmationText))
+                    OutlinedTextField(
+                        value = ui.deletionConfirmation,
+                        onValueChange = vm::updateDeletionConfirmation,
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = true,
+                        label = { Text(stringResource(R.string.platform_admin_delete_confirm_label)) },
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = vm::confirmDeletion,
+                    enabled = !ui.busy && ui.deletionConfirmation == preview.confirmationText,
+                ) { Text(stringResource(R.string.platform_admin_delete_action), color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = vm::dismissDeletion, enabled = !ui.busy) {
+                    Text(stringResource(R.string.cancel))
+                }
+            },
+        )
     }
 }
 
@@ -249,7 +308,13 @@ private fun SummaryCard(
 }
 
 @Composable
-private fun AccountCard(account: AdminCloudAccount, busy: Boolean, onSetPlan: (String, String) -> Unit) {
+private fun AccountCard(
+    account: AdminCloudAccount,
+    busy: Boolean,
+    onSetPlan: (String, String) -> Unit,
+    onDeleteAccount: (String) -> Unit,
+    onDeleteStore: (String) -> Unit,
+) {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
@@ -265,47 +330,55 @@ private fun AccountCard(account: AdminCloudAccount, busy: Boolean, onSetPlan: (S
                     )
                 }
                 StateBadge(
-                    text = stringResource(if (account.subscriptions.isEmpty()) R.string.platform_admin_unlinked else R.string.platform_admin_linked),
-                    highlighted = account.subscriptions.isNotEmpty(),
+                    text = stringResource(if (account.storeMembershipCount == 0) R.string.platform_admin_unlinked else R.string.platform_admin_linked),
+                    highlighted = account.storeMembershipCount > 0,
                 )
             }
             HorizontalDivider()
             if (account.subscriptions.isEmpty()) {
-                Text(stringResource(R.string.platform_admin_no_subscriptions), style = MaterialTheme.typography.bodyMedium)
+                if (account.storeMembershipCount > 0) {
+                    Text(
+                        stringResource(R.string.platform_admin_member_only, account.storeMembershipCount),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                } else {
+                    Text(stringResource(R.string.platform_admin_no_subscriptions), style = MaterialTheme.typography.bodyMedium)
+                }
             } else {
-                account.subscriptions.forEachIndexed { index, subscription ->
-                    Surface(
-                        modifier = Modifier.fillMaxWidth(),
-                        color = MaterialTheme.colorScheme.surfaceContainerLow,
-                        shape = RoundedCornerShape(14.dp),
-                    ) {
-                        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                account.subscriptions.forEach { subscription ->
+                    key(subscription.storeId) {
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            color = MaterialTheme.colorScheme.surfaceContainerLow,
+                            shape = RoundedCornerShape(14.dp),
+                        ) {
+                            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        Text(
+                                            stringResource(R.string.platform_admin_store_subscription, subscription.storeName),
+                                            style = MaterialTheme.typography.labelLarge,
+                                        )
+                                        Text(subscription.storeId, style = MaterialTheme.typography.labelSmall)
+                                        Text(
+                                            stringResource(
+                                                R.string.platform_admin_subscription_status,
+                                                subscription.plan.uppercase(),
+                                                subscription.status,
+                                            ),
+                                            style = MaterialTheme.typography.bodyMedium,
+                                        )
+                                    }
+                                    StateBadge(text = subscription.plan.uppercase(), highlighted = subscription.plan.equals("pro", ignoreCase = true))
+                                }
+                                subscription.expiresAt?.let {
                                     Text(
-                                        stringResource(R.string.platform_admin_subscription_label, index + 1),
-                                        style = MaterialTheme.typography.labelLarge,
-                                    )
-                                    Text(
-                                        stringResource(
-                                            R.string.platform_admin_subscription_status,
-                                            subscription.plan.uppercase(),
-                                            subscription.status,
-                                        ),
-                                        style = MaterialTheme.typography.bodyMedium,
+                                        stringResource(R.string.platform_admin_subscription_expires, formatAdminDate(it)),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                                     )
                                 }
-                                StateBadge(text = subscription.plan.uppercase(), highlighted = subscription.plan.equals("pro", ignoreCase = true))
-                            }
-                            subscription.expiresAt?.let {
-                                Text(
-                                    stringResource(R.string.platform_admin_subscription_expires, formatAdminDate(it)),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            if (subscription.status.equals("active", ignoreCase = true)) {
-                                if (subscription.plan.equals("pro", ignoreCase = true)) {
+                                if (subscription.hasActiveProAccess()) {
                                     OutlinedButton(
                                         onClick = { onSetPlan(subscription.storeId, "free") },
                                         enabled = !busy,
@@ -318,10 +391,27 @@ private fun AccountCard(account: AdminCloudAccount, busy: Boolean, onSetPlan: (S
                                         modifier = Modifier.fillMaxWidth(),
                                     ) { Text(stringResource(R.string.platform_admin_enable_pro)) }
                                 }
+                                OutlinedButton(
+                                    onClick = { onDeleteStore(subscription.storeId) },
+                                    enabled = !busy,
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    Text(
+                                        stringResource(R.string.platform_admin_delete_store_named, subscription.storeName),
+                                        color = MaterialTheme.colorScheme.error,
+                                    )
+                                }
                             }
                         }
                     }
                 }
+            }
+            OutlinedButton(
+                onClick = { onDeleteAccount(account.userId) },
+                enabled = !busy,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(stringResource(R.string.platform_admin_delete_account), color = MaterialTheme.colorScheme.error)
             }
         }
     }

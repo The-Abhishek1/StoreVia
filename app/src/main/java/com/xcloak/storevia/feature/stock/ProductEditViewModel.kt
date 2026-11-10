@@ -6,21 +6,20 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.xcloak.storevia.R
-import com.xcloak.storevia.core.database.dao.CategoryDao
-import com.xcloak.storevia.core.database.dao.ProductDao
-import com.xcloak.storevia.core.database.dao.UnitDao
 import com.xcloak.storevia.core.database.entity.CategoryEntity
 import com.xcloak.storevia.core.database.entity.ProductEntity
 import com.xcloak.storevia.core.database.entity.UnitEntity
 import com.xcloak.storevia.core.util.Parsing
 import com.xcloak.storevia.core.util.PackUnit
 import com.xcloak.storevia.data.product.ProductRepository
+import com.xcloak.storevia.data.product.ProductCatalogRepository
 import com.xcloak.storevia.data.product.SaveResult
 import com.xcloak.storevia.data.prefs.AppPrefs
 import com.xcloak.storevia.core.store.StoreFeatureSet
 import com.xcloak.storevia.core.store.StoreTypeConfig
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
@@ -58,6 +57,7 @@ data class EditUi(
     val isNew: Boolean = true,
     val errors: Map<String, FieldError> = emptyMap(),
     val saving: Boolean = false,
+    val cloudError: String? = null,
 )
 
 sealed interface EditEvent {
@@ -68,9 +68,7 @@ sealed interface EditEvent {
 @HiltViewModel
 class ProductEditViewModel @Inject constructor(
     private val handle: SavedStateHandle,
-    private val productDao: ProductDao,
-    unitDao: UnitDao,
-    categoryDao: CategoryDao,
+    private val catalog: ProductCatalogRepository,
     private val repo: ProductRepository,
     prefs: AppPrefs,
 ) : ViewModel() {
@@ -79,15 +77,19 @@ class ProductEditViewModel @Inject constructor(
     private val parentId: String? = handle["parentId"]
     private var original: ProductEntity? = null
     val isVariant: Boolean = parentId != null
+    private val _catalogError = MutableStateFlow<String?>(null)
+    val catalogError: StateFlow<String?> = _catalogError.asStateFlow()
 
     private val _ui = MutableStateFlow(EditUi(isNew = productId == null))
     val ui: StateFlow<EditUi> = _ui.asStateFlow()
 
-    val units: StateFlow<List<UnitEntity>> =
-        unitDao.observeAll().stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+    val units: StateFlow<List<UnitEntity>> = catalog.observeUnits()
+        .catch { _catalogError.value = it.message ?: "Cloud units could not be loaded."; emit(emptyList()) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
-    val categories: StateFlow<List<CategoryEntity>> =
-        categoryDao.observeAll().stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
+    val categories: StateFlow<List<CategoryEntity>> = catalog.observeCategories()
+        .catch { _catalogError.value = it.message ?: "Cloud categories could not be loaded."; emit(emptyList()) }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
 
     val features: StateFlow<StoreFeatureSet> = prefs.settings.map { StoreTypeConfig.of(it.storeType) }
         .stateIn(viewModelScope, SharingStarted.Eagerly, StoreTypeConfig.of(prefs.settings.value.storeType))
@@ -116,41 +118,51 @@ class ProductEditViewModel @Inject constructor(
     }
 
     private suspend fun loadVariantTemplate(id: String) {
-        val parent = productDao.getById(id) ?: return
-        if (parent.deletedAt != null || parent.parentProductId != null) return
-        _ui.update {
-            it.copy(form = EditForm(
-                name = parent.name,
-                unitId = parent.unitId,
-                hsn = parent.hsnCode.orEmpty(),
-                gstRateBp = parent.gstRateBp,
-                taxInclusive = parent.taxInclusive,
-                sellPrice = Parsing.paiseToInput(parent.sellPricePaise),
-                cost = Parsing.paiseToInput(parent.costPaise),
-                minStock = if (parent.minStockMilli > 0) Parsing.milliToInput(parent.minStockMilli) else "",
-                trackExpiry = parent.trackExpiry,
-                categoryId = parent.categoryId.orEmpty(),
-                attributes = decodeAttributes(parent.attributesJson),
-            ))
+        try {
+            val parent = catalog.getProduct(id) ?: return
+            if (parent.deletedAt != null || parent.parentProductId != null) return
+            _ui.update {
+                it.copy(form = EditForm(
+                    name = parent.name,
+                    unitId = parent.unitId,
+                    hsn = parent.hsnCode.orEmpty(),
+                    gstRateBp = parent.gstRateBp,
+                    taxInclusive = parent.taxInclusive,
+                    sellPrice = Parsing.paiseToInput(parent.sellPricePaise),
+                    cost = Parsing.paiseToInput(parent.costPaise),
+                    minStock = if (parent.minStockMilli > 0) Parsing.milliToInput(parent.minStockMilli) else "",
+                    trackExpiry = parent.trackExpiry,
+                    categoryId = parent.categoryId.orEmpty(),
+                    attributes = decodeAttributes(parent.attributesJson),
+                ))
+            }
+        } catch (error: Exception) {
+            if (error is CancellationException) throw error
+            _ui.update { it.copy(cloudError = error.message ?: "Cloud product could not be loaded.") }
         }
     }
 
     private suspend fun load(id: String) {
-        val p = productDao.observeById(id).first() ?: return
-        original = p
-        val bc = productDao.getBarcodes(id).firstOrNull().orEmpty()
-        _ui.update {
-            it.copy(
-                form = EditForm(
-                    name = p.name, variantLabel = p.variantLabel.orEmpty(), sku = p.sku.orEmpty(), barcode = bc, unitId = p.unitId,
-                    hsn = p.hsnCode.orEmpty(), gstRateBp = p.gstRateBp, taxInclusive = p.taxInclusive,
-                    sellPrice = Parsing.paiseToInput(p.sellPricePaise), cost = Parsing.paiseToInput(p.costPaise),
-                    minStock = if (p.minStockMilli > 0) Parsing.milliToInput(p.minStockMilli) else "",
-                    trackExpiry = p.trackExpiry, categoryId = p.categoryId.orEmpty(),
-                    serialTracked = p.serialTracked,
-                    attributes = decodeAttributes(p.attributesJson),
-                ),
-            )
+        try {
+            val p = catalog.getProduct(id) ?: return
+            original = p
+            val bc = catalog.getBarcode(id).orEmpty()
+            _ui.update {
+                it.copy(
+                    form = EditForm(
+                        name = p.name, variantLabel = p.variantLabel.orEmpty(), sku = p.sku.orEmpty(), barcode = bc, unitId = p.unitId,
+                        hsn = p.hsnCode.orEmpty(), gstRateBp = p.gstRateBp, taxInclusive = p.taxInclusive,
+                        sellPrice = Parsing.paiseToInput(p.sellPricePaise), cost = Parsing.paiseToInput(p.costPaise),
+                        minStock = if (p.minStockMilli > 0) Parsing.milliToInput(p.minStockMilli) else "",
+                        trackExpiry = p.trackExpiry, categoryId = p.categoryId.orEmpty(),
+                        serialTracked = p.serialTracked,
+                        attributes = decodeAttributes(p.attributesJson),
+                    ),
+                )
+            }
+        } catch (error: Exception) {
+            if (error is CancellationException) throw error
+            _ui.update { it.copy(cloudError = error.message ?: "Cloud product could not be loaded.") }
         }
     }
 
@@ -205,14 +217,14 @@ class ProductEditViewModel @Inject constructor(
             attributesJson = encodeAttributes(f.attributes),
         )
         viewModelScope.launch {
-            _ui.update { it.copy(saving = true) }
+            _ui.update { it.copy(saving = true, cloudError = null) }
             try {
                 if (product.serialTracked && original?.serialTracked != true) {
-                    if (productDao.currentStock(product.id) != 0L || productDao.hasStockHistory(product.id)) {
+                    if (repo.hasStockOrHistory(product.id)) {
                         _ui.update { it.copy(saving = false, errors = mapOf("serial" to FieldError(R.string.err_serial_existing_stock))) }
                         return@launch
                     }
-                    if (productDao.hasVariants(product.id)) {
+                    if (repo.hasVariants(product.id)) {
                         _ui.update { it.copy(saving = false, errors = mapOf("serial" to FieldError(R.string.err_serial_variant))) }
                         return@launch
                     }
@@ -228,13 +240,23 @@ class ProductEditViewModel @Inject constructor(
                 }
             } catch (e: PermissionDeniedException) {
                 _ui.update { it.copy(saving = false, errors = mapOf("name" to FieldError(R.string.err_permission_denied))) }
+            } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                _ui.update { it.copy(saving = false, cloudError = e.message ?: "Cloud product save failed.") }
             }
         }
     }
 
     fun archive() {
         val id = productId ?: return
-        viewModelScope.launch { try { repo.archive(id); _events.send(EditEvent.Archived) } catch (_: PermissionDeniedException) { } }
+        viewModelScope.launch {
+            try { repo.archive(id); _events.send(EditEvent.Archived) }
+            catch (_: PermissionDeniedException) { _ui.update { it.copy(cloudError = "You do not have permission to archive products.") } }
+            catch (e: Exception) {
+                if (e is CancellationException) throw e
+                _ui.update { it.copy(cloudError = e.message ?: "Cloud product archive failed.") }
+            }
+        }
     }
 
     private fun encodeAttributes(attributes: Map<String, String>): String =

@@ -24,6 +24,7 @@ class ReceivePaymentUseCase @Inject constructor(
     private val saleDao: SaleDao,
     private val access: Access = OwnerAccess,
     private val audit: AuditSink = NoAudit,
+    private val cloudPayments: CustomerPaymentOperations = LocalCustomerPaymentOperations,
 ) {
     suspend operator fun invoke(
         customerId: String,
@@ -33,6 +34,10 @@ class ReceivePaymentUseCase @Inject constructor(
     ) {
         access.require(Permission.RECEIVE_KHATA_PAYMENT)
         if (amountPaise <= 0) throw KhataException(KhataException.Reason.INVALID_AMOUNT)
+        if (cloudPayments.isCloudMode()) {
+            cloudPayments.receive(customerId, amountPaise, method, now)
+            return
+        }
         db.withTransaction {
             if (customerDao.getById(customerId) == null) {
                 throw KhataException(KhataException.Reason.CUSTOMER_NOT_FOUND)

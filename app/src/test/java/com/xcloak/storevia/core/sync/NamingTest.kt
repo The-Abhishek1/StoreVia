@@ -15,16 +15,24 @@ class NamingTest {
 
     @Test fun tablesAreOrderedParentsFirst() {
         val names = SyncTables.all.map { it.name }
-        fun before(a: String, b: String) = assertTrue("$a before $b", names.indexOf(a) < names.indexOf(b))
-        before("products", "batches"); before("products", "product_barcodes"); before("sales", "sale_lines")
-        before("sale_returns", "sale_return_lines"); before("purchases", "purchase_lines")
+        val indexes = names.withIndex().associate { it.value to it.index }
+        SyncTables.all.forEach { table ->
+            table.dependsOn.forEach { dependency ->
+                assertTrue("$dependency before ${table.name}", indexes.getValue(dependency) < indexes.getValue(table.name))
+            }
+        }
+        assertTrue("serial_numbers depends on its product and batch", SyncTables.all.single { it.name == "serial_numbers" }
+            .dependsOn.containsAll(setOf("products", "batches")))
         assertEquals(names.size, names.toSet().size)
     }
 
-    @Test fun nothingThatStaysOnThePhoneIsSynced() {
-        assertTrue("held_carts" !in SyncTables.all.map { it.name })
+    @Test fun deviceSpecificSettingsStayLocalAndHeldCartsAreSynced() {
+        assertTrue("held_carts" in SyncTables.all.map { it.name })
+        assertTrue("held_carts are ordered after their serialized dependencies", SyncTables.all.single { it.name == "held_carts" }
+            .dependsOn.containsAll(setOf("customers", "products", "batches")))
         assertTrue("sync_state" !in SyncTables.all.map { it.name })
         assertTrue("pinHash" in SyncTables.all.single { it.name == "staff" }.localOnly)
         assertTrue("nextInvoiceNo" in SyncTables.all.single { it.name == "store" }.localOnly)
+        assertTrue("selectedOnDevice" in SyncTables.all.single { it.name == "branches" }.localOnly)
     }
 }

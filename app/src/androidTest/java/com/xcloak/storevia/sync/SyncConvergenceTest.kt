@@ -2,9 +2,21 @@ package com.xcloak.storevia.sync
 
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.xcloak.storevia.core.database.entity.CustomerEntity
+import com.xcloak.storevia.core.database.entity.HeldCartEntity
 import com.xcloak.storevia.core.database.entity.MovementType
 import com.xcloak.storevia.core.database.entity.ProductEntity
+import com.xcloak.storevia.core.database.entity.PurchaseEntity
+import com.xcloak.storevia.core.database.entity.PaymentMethod
 import com.xcloak.storevia.core.database.entity.SaleStatus
+import com.xcloak.storevia.core.database.entity.SerialNumberEntity
+import com.xcloak.storevia.core.database.entity.SupplierEntity
+import com.xcloak.storevia.core.database.entity.SupplierLedgerEntity
+import com.xcloak.storevia.core.database.entity.SupplierLedgerType
+import com.xcloak.storevia.core.sync.SyncTables
+import com.xcloak.storevia.core.sync.SyncRemote
+import com.xcloak.storevia.domain.purchase.PaySupplierUseCase
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.coroutines.runBlocking
 import org.junit.After
 import org.junit.Assert.*
@@ -78,6 +90,119 @@ class SyncConvergenceTest {
 
         assertTrue(first.pushed > 0); assertEquals(0, second.pushed)
         assertEquals(before, a.snapshot()); assertEquals(rowsOnServer, remote.count("stock_movements"))
+    }
+
+    @Test fun batchesArriveBeforeSerialNumbersAndHeldCartJsonIsPreserved() = runBlocking {
+        val p = a.seedShop()
+        val batchId = a.rows("SELECT id FROM batches").single().single()
+        val customer = CustomerEntity(name = "Ravi")
+        a.db.customerDao().insert(customer)
+        a.db.serialNumberDao().insertAll(listOf(SerialNumberEntity(
+            productId = p.id, batchId = batchId, serialNumber = "SERIAL-001",
+        )))
+        val serializedItems = """[{"productId":"${p.id}","qtyMilli":1000,"unitPricePaise":1000,"preferredBatchId":"$batchId"}]"""
+        val held = HeldCartEntity(
+            label = customer.name,
+            customerId = customer.id,
+            itemsJson = serializedItems,
+            itemCount = 1,
+        )
+        a.db.heldCartDao().insert(held)
+
+        a.engine(remote).sync()
+        b.engine(remote).sync()
+
+        assertEquals(1, b.rows("SELECT id FROM serial_numbers").size)
+        val received = b.db.heldCartDao().getById(held.id)!!
+        assertEquals(customer.id, received.customerId)
+        assertEquals(serializedItems, received.itemsJson)
+        assertEquals(1, remote.count("held_carts"))
+
+        b.db.heldCartDao().delete(held.id, System.currentTimeMillis())
+        b.engine(remote).sync()
+        a.engine(remote).sync()
+        assertNull(a.db.heldCartDao().getById(held.id))
+        assertTrue(a.rows("SELECT id FROM held_carts WHERE id = '${held.id}' AND deletedAt IS NOT NULL").isNotEmpty())
+    }
+
+    @Test fun allocatedSupplierPaymentUpdatesPurchaseOnOtherPhone() = runBlocking {
+        val supplier = SupplierEntity(name = "Supplier")
+        a.db.supplierDao().insert(supplier)
+        val purchase = PurchaseEntity(
+            supplierId = supplier.id,
+            purchaseDate = 1L,
+            totalPaise = 1_000,
+            paidPaise = 0,
+        )
+        a.db.purchaseDao().insert(purchase)
+        a.db.supplierDao().insertLedger(
+            SupplierLedgerEntity(
+                supplierId = supplier.id,
+                type = SupplierLedgerType.PURCHASE,
+                amountPaise = purchase.totalPaise,
+                refType = "PURCHASE",
+                refId = purchase.id,
+            ),
+        )
+        a.engine(remote).sync()
+        b.engine(remote).sync()
+
+        PaySupplierUseCase(a.db, a.db.supplierDao())(
+            supplier.id, 400, PaymentMethod.CASH, purchaseId = purchase.id,
+        )
+        a.engine(remote).sync()
+        b.engine(remote).sync()
+
+        assertEquals(400L, a.db.purchaseDao().getById(purchase.id)!!.paidPaise)
+        assertEquals(400L, b.db.purchaseDao().getById(purchase.id)!!.paidPaise)
+    }
+
+    @Test fun transferringLocalDatasetUploadsEveryTableAndVerifiesTheCloudSnapshot() = runBlocking {
+        val p = a.seedShop()
+        a.sellPieces(p, 2)
+        val engine = a.engine(remote)
+
+        val result = engine.transferLocalDatasetAndVerify()
+
+        assertTrue(result.pushed > 0)
+        SyncTables.all.forEach { table ->
+            assertEquals(table.name, a.rows("SELECT id FROM ${table.name}").size, remote.count(table.name))
+            assertEquals(table.name, 0, a.rows("SELECT id FROM ${table.name} WHERE dirty = 1").size)
+        }
+    }
+
+    @Test fun cloudRefreshNeverUploadsDirtyRoomRows() = runBlocking {
+        val product = a.seedShop()
+        a.db.productDao().update(product.copy(name = "Room-only edit", dirty = true))
+
+        val result = a.engine(remote).pullOnly()
+
+        assertEquals(0, result.pushed)
+        assertEquals(0, remote.count("products"))
+        assertEquals(1, a.rows("SELECT id FROM products WHERE dirty = 1").size)
+    }
+
+    @Test fun transferDoesNotActivateOnServerDataThatDiffersFromTheLocalSnapshot() = runBlocking {
+        val p = a.seedShop()
+        val tamperingRemote = object : SyncRemote {
+            override suspend fun push(table: String, rows: List<JsonObject>, ignoreDuplicates: Boolean) {
+                remote.push(table, rows, ignoreDuplicates)
+            }
+
+            override suspend fun pull(table: String, afterTs: String?, afterId: String, limit: Int): List<JsonObject> =
+                remote.pull(table, afterTs, afterId, limit).map { row ->
+                    if (table == "products" && row["id"] == JsonPrimitive(p.id)) {
+                        JsonObject(row + ("name" to JsonPrimitive("server-mismatch")))
+                    } else row
+                }
+        }
+
+        try {
+            a.engine(tamperingRemote).transferLocalDatasetAndVerify()
+            fail("Transfer verification must reject a cloud row that differs from the original local dataset.")
+        } catch (expected: IllegalStateException) {
+            assertTrue(expected.message.orEmpty().contains("products"))
+        }
     }
 
     @Test fun aNewPhoneRebuildsTheSameNumbersFromTheRecords() = runBlocking {

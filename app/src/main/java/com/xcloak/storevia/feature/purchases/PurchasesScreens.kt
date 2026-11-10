@@ -34,6 +34,10 @@ import com.xcloak.storevia.core.database.entity.PurchaseLineEntity
 import com.xcloak.storevia.core.money.Money
 import com.xcloak.storevia.core.ui.LoadingState
 import com.xcloak.storevia.core.util.Parsing
+import com.xcloak.storevia.data.cloud.CloudPurchaseRepository
+import com.xcloak.storevia.data.prefs.AppPrefs
+import com.xcloak.storevia.data.prefs.StorageModeRouter
+import com.xcloak.storevia.data.product.ProductCatalogRepository
 import com.xcloak.storevia.domain.purchase.ReorderPlanner
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
@@ -54,6 +58,8 @@ class PurchasesListViewModel @Inject constructor(
     dao: PurchaseDao,
     branchDao: BranchDao,
     session: StaffSession,
+    prefs: AppPrefs,
+    cloudPurchases: CloudPurchaseRepository,
 ) : ViewModel() {
     private val _query = MutableStateFlow("")
     private val _unpaidOnly = MutableStateFlow(false)
@@ -62,18 +68,27 @@ class PurchasesListViewModel @Inject constructor(
     val canManage: StateFlow<Boolean> = session.actorState
         .map { it.can(Permission.MANAGE_PURCHASES) }
         .stateIn(viewModelScope, SharingStarted.Eagerly, session.actor().can(Permission.MANAGE_PURCHASES))
-    val hasBranch: StateFlow<Boolean> = branchDao.observeActiveBranchId().map { it != null }
+    private val branchId = StorageModeRouter.observe(
+        prefs.settings.map { it.storageMode },
+        local = { branchDao.observeActiveBranchId() },
+        cloud = { cloudPurchases.observeBranchId() },
+    )
+    val hasBranch: StateFlow<Boolean> = branchId.map { it != null }
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
 
     val rows: StateFlow<List<PurchaseListRow>?> = combine(
-        branchDao.observeActiveBranchId(),
+        branchId,
         _query,
         _unpaidOnly,
         canManage,
     ) { branchId, query, unpaidOnly, allowed -> PurchaseListFilter(branchId, query.trim(), unpaidOnly, allowed) }
         .flatMapLatest { filter ->
             if (filter.allowed && filter.branchId != null) {
-                dao.observeRecent(200, filter.branchId, filter.query, filter.unpaidOnly)
+                StorageModeRouter.observe(
+                    prefs.settings.map { it.storageMode },
+                    local = { dao.observeRecent(200, filter.branchId, filter.query, filter.unpaidOnly) },
+                    cloud = { cloudPurchases.observePurchases(filter.branchId, filter.query, filter.unpaidOnly) },
+                )
             } else {
                 flowOf(emptyList<PurchaseListRow>())
             }
@@ -181,20 +196,37 @@ class PurchaseDetailViewModel @Inject constructor(
     supplierDao: SupplierDao,
     branchDao: BranchDao,
     session: StaffSession,
+    prefs: AppPrefs,
+    cloudPurchases: CloudPurchaseRepository,
 ) : ViewModel() {
     private val id: String = checkNotNull(handle["id"])
     val canManage: StateFlow<Boolean> = session.actorState
         .map { it.can(Permission.MANAGE_PURCHASES) }
         .stateIn(viewModelScope, SharingStarted.Eagerly, session.actor().can(Permission.MANAGE_PURCHASES))
-    val hasBranch: StateFlow<Boolean> = branchDao.observeActiveBranchId().map { it != null }
+    private val branchId = StorageModeRouter.observe(
+        prefs.settings.map { it.storageMode },
+        local = { branchDao.observeActiveBranchId() },
+        cloud = { cloudPurchases.observeBranchId() },
+    )
+    val hasBranch: StateFlow<Boolean> = branchId.map { it != null }
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
-    val ui: StateFlow<PurchaseDetailUi?> = combine(branchDao.observeActiveBranchId(), canManage) { branchId, allowed ->
-        branchId.takeIf { allowed }
+    val ui: StateFlow<PurchaseDetailUi?> = combine(branchId, canManage) { activeBranchId, allowed ->
+        activeBranchId.takeIf { allowed }
     }.flatMapLatest { branchId ->
         if (branchId == null) flowOf<PurchaseDetailUi?>(null)
-        else combine(purchaseDao.observeById(id, branchId), purchaseDao.observeLines(id, branchId)) { p, lines ->
-            if (p == null) null else PurchaseDetailUi(p, p.supplierId?.let { supplierDao.getById(it)?.name }, lines)
-        }
+        else StorageModeRouter.observe(
+            prefs.settings.map { it.storageMode },
+            local = {
+                combine(purchaseDao.observeById(id, branchId), purchaseDao.observeLines(id, branchId)) { p, lines ->
+                    if (p == null) null else PurchaseDetailUi(p, p.supplierId?.let { supplierDao.getById(it)?.name }, lines)
+                }
+            },
+            cloud = {
+                cloudPurchases.observePurchaseDetail(id, branchId).map { detail ->
+                    detail?.let { PurchaseDetailUi(it.purchase, it.supplierName, it.lines) }
+                }
+            },
+        )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 }
 
@@ -254,29 +286,45 @@ data class ReorderUi(val storeName: String, val rows: List<ReorderRow>)
 class ReorderViewModel @Inject constructor(
     reportDao: ReportDao,
     storeDao: StoreDao,
+    prefs: AppPrefs,
+    cloudPurchases: CloudPurchaseRepository,
     branchDao: BranchDao,
     session: StaffSession,
 ) : ViewModel() {
     val canManage: StateFlow<Boolean> = session.actorState
         .map { it.can(Permission.MANAGE_PURCHASES) }
         .stateIn(viewModelScope, SharingStarted.Eagerly, session.actor().can(Permission.MANAGE_PURCHASES))
-    val hasBranch: StateFlow<Boolean> = branchDao.observeActiveBranchId().map { it != null }
+    private val branchId = StorageModeRouter.observe(
+        prefs.settings.map { it.storageMode },
+        local = { branchDao.observeActiveBranchId() },
+        cloud = { cloudPurchases.observeBranchId() },
+    )
+    val hasBranch: StateFlow<Boolean> = branchId.map { it != null }
         .stateIn(viewModelScope, SharingStarted.Eagerly, true)
+    private val storeName = StorageModeRouter.observe(
+        prefs.settings.map { it.storageMode },
+        local = { storeDao.observe().map { it?.name.orEmpty() } },
+        cloud = { flow { emit(cloudPurchases.storeName()) } },
+    )
 
     val ui: StateFlow<ReorderUi?> = combine(
-        branchDao.observeActiveBranchId(),
-        storeDao.observe(),
+        branchId,
+        storeName,
         canManage,
-    ) { branchId, store, allowed -> ReorderFilter(branchId, store, allowed) }
+    ) { activeBranchId, name, allowed -> ReorderFilter(activeBranchId, name, allowed) }
         .flatMapLatest { filter ->
             if (!filter.allowed || filter.branchId == null) flowOf<ReorderUi?>(null)
-            else reportDao.reorderRows(filter.branchId).map { rows -> ReorderUi(filter.store?.name.orEmpty(), rows) }
+            else StorageModeRouter.observe(
+                prefs.settings.map { it.storageMode },
+                local = { reportDao.reorderRows(filter.branchId) },
+                cloud = { cloudPurchases.observeReorderRows(filter.branchId) },
+            ).map { rows -> ReorderUi(filter.storeName, rows) }
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     private data class ReorderFilter(
         val branchId: String?,
-        val store: com.xcloak.storevia.core.database.entity.StoreEntity?,
+        val storeName: String,
         val allowed: Boolean,
     )
 }
@@ -313,7 +361,21 @@ fun ReorderScreen(onBack: () -> Unit, onNewPurchase: () -> Unit, vm: ReorderView
             return@Column
         }
         if (d.rows.isEmpty()) {
-            Text(stringResource(R.string.reorder_none), Modifier.padding(24.dp), style = MaterialTheme.typography.bodyLarge)
+            Column(
+                modifier = Modifier.weight(1f).fillMaxWidth().padding(24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp, Alignment.CenterVertically),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(stringResource(R.string.reorder_none), style = MaterialTheme.typography.titleMedium)
+                Text(
+                    stringResource(R.string.reorder_none_hint),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Button(onClick = onNewPurchase) {
+                    Text(stringResource(R.string.new_purchase))
+                }
+            }
             return@Column
         }
         Text(stringResource(R.string.reorder_hint), Modifier.padding(horizontal = 16.dp, vertical = 8.dp), style = MaterialTheme.typography.bodySmall)

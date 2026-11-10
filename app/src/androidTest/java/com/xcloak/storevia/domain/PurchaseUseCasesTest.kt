@@ -91,12 +91,64 @@ class PurchaseUseCasesTest {
     }
 
     @Test fun payingTheSupplierReducesWhatYouOweAndCannotOverpay() = runBlocking {
-        buy(PurchaseItem(product.id, 10_000, 700))                                       // owe ₹70
-        paySupplier(supplier.id, 3_000, PaymentMethod.CASH)
+        val purchaseId = buy(PurchaseItem(product.id, 10_000, 700))                     // owe ₹70
+        paySupplier(supplier.id, 3_000, PaymentMethod.CASH, purchaseId = purchaseId)
         assertEquals(4_000L, db.supplierDao().balance(supplier.id))
+        assertEquals(3_000L, db.purchaseDao().getById(purchaseId)!!.paidPaise)
         try { paySupplier(supplier.id, 4_001, PaymentMethod.CASH); fail() }
         catch (e: SupplierPaymentException) { assertEquals(SupplierPaymentException.Reason.EXCEEDS_BALANCE, e.reason) }
         assertEquals(4_000L, db.supplierDao().observeTotalPayable().first())
+    }
+
+    @Test fun supplierPaymentReducesOnlyTheSelectedPurchaseAndUnpaidFilter() = runBlocking {
+        val first = buy(PurchaseItem(product.id, 10_000, 700))
+        val second = buy(PurchaseItem(product.id, 10_000, 900))
+
+        paySupplier(supplier.id, 7_000, PaymentMethod.UPI, purchaseId = first)
+
+        assertEquals(7_000L, db.purchaseDao().getById(first)!!.paidPaise)
+        assertEquals(0L, db.purchaseDao().getById(second)!!.paidPaise)
+        val unpaid = db.purchaseDao().observeRecent(unpaidOnly = true).first()
+        assertEquals(listOf(second), unpaid.map { it.id })
+        val payment = db.supplierDao().observeLedger(supplier.id).first().last()
+        assertEquals(-7_000L, payment.amountPaise)
+        assertEquals("PURCHASE", payment.refType)
+        assertEquals(first, payment.refId)
+        assertEquals(9_000L, db.supplierDao().balance(supplier.id))
+    }
+
+    @Test fun supplierPaymentCannotExceedTheExplicitlySelectedPurchaseBalance() = runBlocking {
+        val selected = buy(PurchaseItem(product.id, 1_000, 500))
+        buy(PurchaseItem(product.id, 1_000, 900))
+
+        try {
+            paySupplier(supplier.id, 600, PaymentMethod.CASH, purchaseId = selected)
+            fail("expected SupplierPaymentException")
+        } catch (e: SupplierPaymentException) {
+            assertEquals(SupplierPaymentException.Reason.EXCEEDS_PURCHASE_BALANCE, e.reason)
+        }
+        assertEquals(0L, db.purchaseDao().getById(selected)!!.paidPaise)
+        assertEquals(1_400L, db.supplierDao().balance(supplier.id))
+        assertEquals(0, db.supplierDao().observeLedger(supplier.id).first().count { it.type == SupplierLedgerType.PAYMENT })
+    }
+
+    @Test fun supplierPaymentCannotBeAllocatedToAnotherSuppliersPurchase() = runBlocking {
+        val otherSupplier = SupplierEntity(name = "Other supplier")
+        db.supplierDao().insert(otherSupplier)
+        val otherPurchase = buy(PurchaseItem(product.id, 1_000, 500), supplierId = otherSupplier.id)
+        db.supplierDao().insertLedger(
+            SupplierLedgerEntity(supplierId = supplier.id, type = SupplierLedgerType.ADJUSTMENT, amountPaise = 1_000),
+        )
+
+        try {
+            paySupplier(supplier.id, 100, PaymentMethod.CASH, purchaseId = otherPurchase)
+            fail("expected SupplierPaymentException")
+        } catch (e: SupplierPaymentException) {
+            assertEquals(SupplierPaymentException.Reason.PURCHASE_SUPPLIER_MISMATCH, e.reason)
+        }
+        assertEquals(0L, db.purchaseDao().getById(otherPurchase)!!.paidPaise)
+        assertEquals(1_000L, db.supplierDao().balance(supplier.id))
+        assertEquals(500L, db.supplierDao().balance(otherSupplier.id))
     }
 
     @Test fun purchasedStockCanBeSoldEarliestExpiryFirst() = runBlocking {

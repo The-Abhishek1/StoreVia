@@ -37,6 +37,7 @@ fun MoreScreen(
     onCustomers: () -> Unit, onStoreSettings: () -> Unit, onBackup: () -> Unit, onData: () -> Unit, onPrefs: () -> Unit,
     onCategories: () -> Unit, onSuppliers: () -> Unit, onPurchases: () -> Unit, onReorder: () -> Unit,
     onStaff: () -> Unit, onAudit: () -> Unit, onCloudAccount: () -> Unit,
+    privacyOptionsRequired: Boolean = false, onPrivacyOptions: () -> Unit = {},
     access: AccessViewModel = hiltViewModel(),
 ) {
     val actor = LocalActor.current
@@ -99,6 +100,11 @@ fun MoreScreen(
                     trailingContent = { Icon(Icons.Filled.ChevronRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant) },
                     colors = ListItemDefaults.colors(containerColor = MaterialTheme.colorScheme.surface),
                 )
+            }
+        }
+        if (privacyOptionsRequired) {
+            OutlinedButton(onClick = onPrivacyOptions, modifier = Modifier.fillMaxWidth()) {
+                Text(stringResource(R.string.ads_privacy_options))
             }
         }
     }

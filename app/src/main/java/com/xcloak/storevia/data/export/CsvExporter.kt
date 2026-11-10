@@ -6,6 +6,9 @@ import com.xcloak.storevia.core.database.dao.CustomerDao
 import com.xcloak.storevia.core.database.dao.ExportDao
 import com.xcloak.storevia.core.util.Csv
 import com.xcloak.storevia.core.util.Parsing
+import com.xcloak.storevia.data.cloud.CloudImportExportRepository
+import com.xcloak.storevia.data.prefs.AppPrefs
+import com.xcloak.storevia.data.prefs.StorageModeRouter
 import kotlinx.coroutines.flow.first
 import java.time.Instant
 import java.time.ZoneId
@@ -33,16 +36,34 @@ enum class ExportFormat(val extension: String, val mimeType: String) {
 class CsvExporter @Inject constructor(
     private val exportDao: ExportDao,
     private val customerDao: CustomerDao,
+    private val prefs: AppPrefs,
+    private val cloud: CloudImportExportRepository,
 ) {
     private val dateTime = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm")
 
-    suspend fun build(kind: ExportKind): String = when (kind) {
+    suspend fun build(kind: ExportKind): String = StorageModeRouter.routeSuspend(
+        prefs.settings.value.storageMode,
+        local = { buildLocal(kind) },
+        cloud = { buildCloud(kind) },
+    )
+
+    private suspend fun buildLocal(kind: ExportKind): String = when (kind) {
         ExportKind.PRODUCTS -> products()
         ExportKind.STOCK -> stock()
         ExportKind.SALES -> sales()
         ExportKind.SALES_LINES -> salesLines()
         ExportKind.PAYMENTS -> salesPayments()
         ExportKind.CUSTOMERS -> customers()
+        ExportKind.TEMPLATE -> template()
+    }
+
+    private suspend fun buildCloud(kind: ExportKind): String = when (kind) {
+        ExportKind.PRODUCTS -> products(cloud.products())
+        ExportKind.STOCK -> stock(cloud.batches())
+        ExportKind.SALES -> sales(cloud.sales())
+        ExportKind.SALES_LINES -> salesLines(cloud.saleLines())
+        ExportKind.PAYMENTS -> salesPayments(cloud.salePayments())
+        ExportKind.CUSTOMERS -> customers(cloud.customers())
         ExportKind.TEMPLATE -> template()
     }
 
@@ -56,8 +77,10 @@ class CsvExporter @Inject constructor(
         }
     }
 
-    private suspend fun products(): String = Csv.write(
-        listOf(PRODUCT_HEADER) + exportDao.products().map {
+    private suspend fun products(): String = products(exportDao.products())
+
+    private fun products(rows: List<com.xcloak.storevia.core.database.dao.ProductExportRow>): String = Csv.write(
+        listOf(PRODUCT_HEADER) + rows.map {
             listOf(
                 Csv.safe(it.name), Csv.safe(it.sku.orEmpty()), Csv.safe(it.barcode.orEmpty()), Csv.safe(it.unitSymbol), Csv.safe(it.hsnCode.orEmpty()),
                 (it.gstRateBp / 100.0).toString().removeSuffix(".0"), if (it.taxInclusive) "yes" else "no",
@@ -67,9 +90,11 @@ class CsvExporter @Inject constructor(
         }
     )
 
-    private suspend fun salesLines(): String = Csv.write(
+    private suspend fun salesLines(): String = salesLines(exportDao.saleLines())
+
+    private fun salesLines(rows: List<com.xcloak.storevia.core.database.dao.SaleLineExportRow>): String = Csv.write(
         listOf(listOf("bill_id", "sku", "product_name", "qty", "unit_price")) +
-        exportDao.saleLines().map {
+        rows.map {
             listOf(
                 Csv.safe(it.invoiceNo), Csv.safe(it.sku.orEmpty()), Csv.safe(it.productName),
                 Parsing.milliToInput(it.qtyMilli), Parsing.paiseToPlain(it.unitPricePaise),
@@ -77,23 +102,29 @@ class CsvExporter @Inject constructor(
         }
     )
 
-    private suspend fun salesPayments(): String = Csv.write(
+    private suspend fun salesPayments(): String = salesPayments(exportDao.salePayments())
+
+    private fun salesPayments(rows: List<com.xcloak.storevia.core.database.dao.SalePaymentExportRow>): String = Csv.write(
         listOf(listOf("bill_id", "payment_mode", "amount", "reference")) +
-            exportDao.salePayments().map {
+            rows.map {
                 listOf(                Csv.safe(it.invoiceNo), Csv.safe(it.method), Parsing.paiseToPlain(it.amountPaise), Csv.safe(it.reference.orEmpty()))
             },
     )
 
-    private suspend fun stock(): String = Csv.write(
-        listOf(listOf("branch", "product", "unit", "batch_no", "expiry", "quantity", "cost")) + exportDao.batches().map {
+    private suspend fun stock(): String = stock(exportDao.batches())
+
+    private fun stock(rows: List<com.xcloak.storevia.core.database.dao.BatchExportRow>): String = Csv.write(
+        listOf(listOf("branch", "product", "unit", "batch_no", "expiry", "quantity", "cost")) + rows.map {
             listOf(Csv.safe(it.branchName), Csv.safe(it.productName), Csv.safe(it.unitSymbol), Csv.safe(it.batchNo.orEmpty()), it.expiryDate?.toString().orEmpty(),
                 Parsing.milliToInput(it.qtyOnHandMilli), Parsing.paiseToPlain(it.costPaise))
         }
     )
 
-    private suspend fun sales(): String = Csv.write(
+    private suspend fun sales(): String = sales(exportDao.sales())
+
+    private fun sales(rows: List<com.xcloak.storevia.core.database.dao.SaleExportRow>): String = Csv.write(
         listOf(listOf("bill_id", "branch", "date", "customer", "payment_mode", "status", "taxable_value", "tax", "discount", "round_off", "total", "returned", "paid", "due")) +
-            exportDao.sales().map {
+            rows.map {
                 listOf(
                     Csv.safe(it.invoiceNo), Csv.safe(it.branchName), Instant.ofEpochMilli(it.createdAt).atZone(ZoneId.systemDefault()).toLocalDate().toString(),
                     Csv.safe(it.customerName.orEmpty()), Csv.safe(it.paymentMode), Csv.safe(it.status),
@@ -104,8 +135,14 @@ class CsvExporter @Inject constructor(
             }
     )
 
-    private suspend fun customers(): String = Csv.write(
-        listOf(listOf("name", "phone", "balance_due")) + customerDao.observeWithBalance("").first().map {
+    private suspend fun customers(): String = customers(
+        customerDao.observeWithBalance("").first().map {
+            com.xcloak.storevia.data.cloud.CustomerExportRow(it.name, it.phone, it.balancePaise)
+        },
+    )
+
+    private fun customers(rows: List<com.xcloak.storevia.data.cloud.CustomerExportRow>): String = Csv.write(
+        listOf(listOf("name", "phone", "balance_due")) + rows.map {
             listOf(Csv.safe(it.name), Csv.safe(it.phone.orEmpty()), Parsing.paiseToPlain(it.balancePaise))
         }
     )

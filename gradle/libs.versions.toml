@@ -1,6 +1,6 @@
 # NOTE: versions are a consistent known set; bump via Android Studio's upgrade assistant if needed.
 [versions]
-agp = "8.7.3"
+agp = "8.10.1"
 kotlin = "2.0.21"
 ksp = "2.0.21-1.0.28"
 composeBom = "2024.12.01"
@@ -23,7 +23,10 @@ androidxTestExt = "1.2.1"
 camerax = "1.4.0"
 mlkitBarcode = "17.3.0"
 androidxTestRunner = "1.6.2"
-playBilling = "7.1.1"
+playBilling = "8.0.0"
+googleMobileAds = "23.3.0"
+guava = "31.1-android"
+ump = "4.0.0"
 
 [libraries]
 androidx-core-ktx = { module = "androidx.core:core-ktx", version = "1.15.0" }
@@ -65,6 +68,9 @@ turbine = { module = "app.cash.turbine:turbine", version.ref = "turbine" }
 androidx-test-ext = { module = "androidx.test.ext:junit", version.ref = "androidxTestExt" }
 androidx-test-runner = { module = "androidx.test:runner", version.ref = "androidxTestRunner" }
 play-billing = { module = "com.android.billingclient:billing-ktx", version.ref = "playBilling" }
+google-mobile-ads = { module = "com.google.android.gms:play-services-ads", version.ref = "googleMobileAds" }
+guava = { module = "com.google.guava:guava", version.ref = "guava" }
+ump = { module = "com.google.android.ump:user-messaging-platform", version.ref = "ump" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

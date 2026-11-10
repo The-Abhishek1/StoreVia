@@ -25,10 +25,15 @@ class CancelSaleUseCase @Inject constructor(
     private val returnItems: ReturnItemsUseCase,
     private val access: Access = OwnerAccess,
     private val audit: AuditSink = NoAudit,
+    private val cloudOperations: SalesInventoryOperations = LocalSalesInventoryOperations,
 ) {
     suspend operator fun invoke(saleId: String, reason: String?, now: Long = System.currentTimeMillis()) {
+        access.require(Permission.CANCEL_BILL)
+        if (cloudOperations.isCloudMode()) {
+            cloudOperations.cancelSale(saleId, reason?.trim()?.ifEmpty { null }, now)
+            return
+        }
         db.withTransaction {
-            access.require(Permission.CANCEL_BILL)
             val sale = saleDao.getById(saleId) ?: throw CancelSaleException(CancelSaleException.Reason.NOT_FOUND)
             if (sale.status == SaleStatus.CANCELLED) throw CancelSaleException(CancelSaleException.Reason.ALREADY_CANCELLED)
             if (sale.status != SaleStatus.COMPLETED || sale.returnedPaise > 0) throw CancelSaleException(CancelSaleException.Reason.HAS_RETURNS)

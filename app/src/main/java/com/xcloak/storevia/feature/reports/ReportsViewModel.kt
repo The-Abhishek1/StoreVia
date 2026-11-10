@@ -6,6 +6,10 @@ import com.xcloak.storevia.core.database.dao.*
 import com.xcloak.storevia.core.database.entity.PaymentMethod
 import com.xcloak.storevia.core.database.entity.ProductEntity
 import com.xcloak.storevia.data.prefs.AppPrefs
+import com.xcloak.storevia.data.prefs.StorageMode
+import com.xcloak.storevia.data.prefs.StorageModeRouter
+import com.xcloak.storevia.feature.home.fetchCloudStoreRows
+import io.github.jan.supabase.SupabaseClient
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
@@ -35,7 +39,7 @@ data class ReportFilterOptions(
     val branches: List<ReportFilterOption> = emptyList(),
 )
 
-private data class ReportQuery(
+internal data class ReportQuery(
     val from: Long,
     val to: Long,
     val method: PaymentMethod?,
@@ -47,7 +51,7 @@ private data class SelectedReportFilters(
     val method: PaymentMethod?,
     val filters: ReportFilters,
 )
-private data class ReportSnapshot(
+internal data class ReportSnapshot(
     val query: ReportQuery? = null,
     val sales: SalesReport = SalesReport(),
     val payments: List<PaymentTotalRow> = emptyList(),
@@ -108,6 +112,16 @@ data class ReportsUi(
     val top: List<TopProductRow> = emptyList(),
     val stock: StockReport = StockReport(),
     val purchaseSpendPaise: Long = 0,
+    val isLoading: Boolean = false,
+    val error: String? = null,
+)
+
+private data class ReportLoad(
+    val query: ReportQuery? = null,
+    val snapshot: ReportSnapshot? = null,
+    val options: ReportFilterOptions = ReportFilterOptions(),
+    val isLoading: Boolean = false,
+    val error: String? = null,
 )
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -121,6 +135,7 @@ class ReportsViewModel @Inject constructor(
     categoryDao: CategoryDao,
     branchDao: BranchDao,
     prefs: AppPrefs,
+    private val supabase: SupabaseClient,
 ) : ViewModel() {
 
     private val period = MutableStateFlow(Period.TODAY)
@@ -177,83 +192,69 @@ class ReportsViewModel @Inject constructor(
         .map { it.expiryWarnDays.coerceAtLeast(1) }
         .distinctUntilChanged()
 
-    private val reportSnapshot: Flow<ReportSnapshot> = query.flatMapLatest { q ->
-        combine(expiryDays, currentDay) { days, today -> days to today }
-            .distinctUntilChanged()
-            .flatMapLatest { (days, today) ->
-                val sales = combine(
-                    reports.sales(q.from, q.to, q.method?.name, q.filters.productId, q.filters.categoryId, q.filters.customerId, q.filters.taxRateBp, q.filters.supplierId, q.filters.branchId),
-                    reports.lines(q.from, q.to, q.method?.name, q.filters.productId, q.filters.categoryId, q.filters.customerId, q.filters.taxRateBp, q.filters.supplierId, q.filters.branchId),
-                    reports.returnsTotal(q.from, q.to, q.method?.name, q.filters.productId, q.filters.categoryId, q.filters.customerId, q.filters.taxRateBp, q.filters.supplierId, q.filters.branchId),
-                    reports.returnLines(q.from, q.to, q.method?.name, q.filters.productId, q.filters.categoryId, q.filters.customerId, q.filters.taxRateBp, q.filters.supplierId, q.filters.branchId),
-                ) { totals, lines, returns, returnLines ->
-                    SalesReport(
-                        bills = totals.bills,
-                        grossPaise = totals.grossPaise,
-                        returnsPaise = returns,
-                        discountPaise = totals.discountPaise,
-                        taxPaise = lines.taxPaise,
-                        // Estimated gross profit: revenue excluding tax minus cost, less what was returned.
-                        profitPaise = (lines.taxablePaise - lines.costPaise) -
-                            (returnLines.taxablePaise - returnLines.costPaise),
-                    )
-                }
-                val payments = reports.paymentsByMethod(
-                    q.from, q.to, q.method?.name, q.filters.productId, q.filters.categoryId, q.filters.customerId, q.filters.taxRateBp, q.filters.supplierId, q.filters.branchId,
-                )
-                val topProducts = reports.topProducts(
-                    q.from, q.to, 5, q.method?.name, q.filters.productId, q.filters.categoryId, q.filters.customerId, q.filters.taxRateBp, q.filters.supplierId, q.filters.branchId,
-                )
-                val purchaseSpend = reports.purchaseSpend(q.from, q.to, q.filters.supplierId, q.filters.branchId)
-                val stockBase = combine(
-                    reports.stockValue(q.filters.branchId),
-                    reports.expiryBetween(today, today.plusDays(days.toLong()), q.filters.branchId),
-                    reports.expiryBetween(LocalDate.of(1970, 1, 1), today.minusDays(1), q.filters.branchId),
-                    batchDao.observeLowStock(q.filters.branchId),
-                    customerDao.observeTotalDue(),
-                ) { value, expiring, expired, low, khata ->
-                    StockReport(value.costPaise, value.retailPaise, expiring, expired, low, khata)
-                }
-                val stock = combine(stockBase, supplierDao.observeTotalPayable()) { report, payable ->
-                    report.copy(payablePaise = payable)
-                }
-                val salesData = combine(sales, payments, topProducts, purchaseSpend) { totals, paymentRows, products, purchases ->
-                    ReportSnapshot(
-                        sales = totals,
-                        payments = paymentRows,
-                        top = products,
-                        purchaseSpendPaise = purchases,
-                    )
-                }
-                combine(salesData, stock) { data, stockReport -> data.copy(stock = stockReport) }
-            }
-            .onStart { emit(ReportSnapshot(query = q)) }
-            .map { it.copy(query = q) }
-    }
-
     private val selectedFilters = combine(period, paymentMethod, filters) { p, method, selected ->
         SelectedReportFilters(p, method, selected)
     }
-    private val options = combine(
-        productDao.observeActiveSellable(),
-        categoryDao.observeAll(),
-        customerDao.observeAll(),
-        supplierDao.observeAll(),
-        branchDao.observeAll(),
-    ) { products, categories, customers, suppliers, branches ->
-        ReportFilterOptions(
-            products = products.map { it.filterOption() },
-            categories = categories.map { ReportFilterOption(it.id, it.name) },
-            customers = customers.map { ReportFilterOption(it.id, it.name) },
-            taxRatesBp = products.map { it.gstRateBp }.distinct().sorted(),
-            suppliers = suppliers.map { ReportFilterOption(it.id, it.name) },
-            branches = branches.map { ReportFilterOption(it.id, it.name) },
+    private val refreshes = MutableStateFlow(0)
+    fun retry() { refreshes.update { it + 1 } }
+
+    private val storageSelection = prefs.settings
+        .map { it.storageMode to it.cloudStoreId }
+        .distinctUntilChanged()
+
+    private val reportLoad: StateFlow<ReportLoad> = combine(
+        query,
+        expiryDays,
+        currentDay,
+        storageSelection,
+        refreshes,
+    ) { q, days, today, selection, _ ->
+        ReportRequest(q, days, today, selection.first, selection.second)
+    }.flatMapLatest { request ->
+        StorageModeRouter.route(
+            request.storageMode,
+            local = {
+                localReportLoad(
+                    request,
+                    reports,
+                    batchDao,
+                    customerDao,
+                    supplierDao,
+                    productDao,
+                    categoryDao,
+                    branchDao,
+                )
+            },
+            cloud = {
+                flow {
+                    emit(ReportLoad(query = request.query, isLoading = true))
+                    val storeId = checkNotNull(request.cloudStoreId) { "No cloud store is selected." }
+                    val rows = fetchCloudStoreRows(
+                        supabase,
+                        storeId,
+                        setOf(
+                            "sales", "sale_lines", "payments", "sale_returns", "sale_return_lines",
+                            "products", "categories", "batches", "units", "customers", "customer_ledger",
+                            "suppliers", "supplier_ledger", "purchases", "purchase_lines", "branches",
+                        ),
+                    )
+                    val result = calculateCloudReports(rows, request.query, request.today, request.expiryWarnDays)
+                    emit(ReportLoad(request.query, result.snapshot, result.options))
+                }.catch { failure ->
+                    emit(ReportLoad(
+                        query = request.query,
+                        error = failure.message ?: "Cloud reports could not be loaded.",
+                    ))
+                }
+            },
         )
-    }
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ReportLoad(isLoading = true))
 
     init {
         viewModelScope.launch {
-            options.collect { available ->
+            reportLoad.collect { loaded ->
+                if (loaded.isLoading || loaded.error != null) return@collect
+                val available = loaded.options
                 val productIds = available.products.mapTo(mutableSetOf()) { it.id }
                 val categoryIds = available.categories.mapTo(mutableSetOf()) { it.id }
                 val customerIds = available.customers.mapTo(mutableSetOf()) { it.id }
@@ -274,27 +275,113 @@ class ReportsViewModel @Inject constructor(
         }
     }
 
-    private val reportBase = combine(query, selectedFilters, reportSnapshot) { currentQuery, filters, snapshot ->
-        val currentSnapshot = snapshot.takeIf {
-            it.query == currentQuery &&
-                currentQuery.period == filters.period &&
-                currentQuery.method == filters.method &&
-                currentQuery.filters == filters.filters
-        } ?: ReportSnapshot(query = currentQuery)
+    val ui: StateFlow<ReportsUi> = combine(reportLoad, selectedFilters) { loaded, selected ->
+        val query = loaded.query
+        val snapshot = loaded.snapshot?.takeIf {
+            it.query == query && query?.period == selected.period &&
+                query.method == selected.method && query.filters == selected.filters
+        }
         ReportsUi(
-            filters.period, filters.method, filters.filters,
-            sales = currentSnapshot.sales,
-            payments = currentSnapshot.payments,
-            top = currentSnapshot.top,
-            stock = currentSnapshot.stock,
-            purchaseSpendPaise = currentSnapshot.purchaseSpendPaise,
+            period = selected.period,
+            paymentMethod = selected.method,
+            filters = selected.filters,
+            filterOptions = loaded.options,
+            sales = snapshot?.sales ?: SalesReport(),
+            payments = snapshot?.payments ?: emptyList(),
+            top = snapshot?.top ?: emptyList(),
+            stock = snapshot?.stock ?: StockReport(),
+            purchaseSpendPaise = snapshot?.purchaseSpendPaise ?: 0,
+            isLoading = loaded.isLoading,
+            error = loaded.error,
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ReportsUi(isLoading = true))
+}
+
+private data class ReportRequest(
+    val query: ReportQuery,
+    val expiryWarnDays: Int,
+    val today: LocalDate,
+    val storageMode: StorageMode?,
+    val cloudStoreId: String?,
+)
+
+private fun localReportLoad(
+    request: ReportRequest,
+    reports: ReportDao,
+    batchDao: BatchDao,
+    customerDao: CustomerDao,
+    supplierDao: SupplierDao,
+    productDao: ProductDao,
+    categoryDao: CategoryDao,
+    branchDao: BranchDao,
+): Flow<ReportLoad> {
+    val q = request.query
+    val sales = combine(
+        reports.sales(q.from, q.to, q.method?.name, q.filters.productId, q.filters.categoryId, q.filters.customerId, q.filters.taxRateBp, q.filters.supplierId, q.filters.branchId),
+        reports.lines(q.from, q.to, q.method?.name, q.filters.productId, q.filters.categoryId, q.filters.customerId, q.filters.taxRateBp, q.filters.supplierId, q.filters.branchId),
+        reports.returnsTotal(q.from, q.to, q.method?.name, q.filters.productId, q.filters.categoryId, q.filters.customerId, q.filters.taxRateBp, q.filters.supplierId, q.filters.branchId),
+        reports.returnLines(q.from, q.to, q.method?.name, q.filters.productId, q.filters.categoryId, q.filters.customerId, q.filters.taxRateBp, q.filters.supplierId, q.filters.branchId),
+    ) { totals, lines, returns, returnLines ->
+        SalesReport(
+            bills = totals.bills,
+            grossPaise = totals.grossPaise,
+            returnsPaise = returns,
+            discountPaise = totals.discountPaise,
+            taxPaise = lines.taxPaise,
+            profitPaise = (lines.taxablePaise - lines.costPaise) -
+                (returnLines.taxablePaise - returnLines.costPaise),
         )
     }
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ReportsUi())
-
-    val ui: StateFlow<ReportsUi> = combine(reportBase, options) { current, choices ->
-        current.copy(filterOptions = choices)
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ReportsUi())
+    val payments = reports.paymentsByMethod(
+        q.from, q.to, q.method?.name, q.filters.productId, q.filters.categoryId, q.filters.customerId, q.filters.taxRateBp, q.filters.supplierId, q.filters.branchId,
+    )
+    val topProducts = reports.topProducts(
+        q.from, q.to, 5, q.method?.name, q.filters.productId, q.filters.categoryId, q.filters.customerId, q.filters.taxRateBp, q.filters.supplierId, q.filters.branchId,
+    )
+    val purchaseSpend = reports.purchaseSpend(q.from, q.to, q.filters.supplierId, q.filters.branchId)
+    val stockBase = combine(
+        reports.stockValue(q.filters.branchId),
+        reports.expiryBetween(request.today, request.today.plusDays(request.expiryWarnDays.toLong()), q.filters.branchId),
+        reports.expiryBetween(LocalDate.of(1970, 1, 1), request.today.minusDays(1), q.filters.branchId),
+        batchDao.observeLowStock(q.filters.branchId),
+        customerDao.observeTotalDue(),
+    ) { value, expiring, expired, low, khata ->
+        StockReport(value.costPaise, value.retailPaise, expiring, expired, low, khata)
+    }
+    val stock = combine(stockBase, supplierDao.observeTotalPayable()) { report, payable ->
+        report.copy(payablePaise = payable)
+    }
+    val snapshot = combine(sales, payments, topProducts, purchaseSpend) { totals, paymentRows, products, purchases ->
+        ReportSnapshot(
+            query = q,
+            sales = totals,
+            payments = paymentRows,
+            top = products,
+            purchaseSpendPaise = purchases,
+        )
+    }
+    val withStock = combine(snapshot, stock) { data, stockReport -> data.copy(stock = stockReport) }
+    val options = combine(
+        productDao.observeActiveSellable(),
+        categoryDao.observeAll(),
+        customerDao.observeAll(),
+        supplierDao.observeAll(),
+        branchDao.observeAll(),
+    ) { products, categories, customers, suppliers, branches ->
+        ReportFilterOptions(
+            products = products.map { it.filterOption() },
+            categories = categories.map { ReportFilterOption(it.id, it.name) },
+            customers = customers.map { ReportFilterOption(it.id, it.name) },
+            taxRatesBp = products.map { it.gstRateBp }.distinct().sorted(),
+            suppliers = suppliers.map { ReportFilterOption(it.id, it.name) },
+            branches = branches.map { ReportFilterOption(it.id, it.name) },
+        )
+    }
+    return combine(withStock, options) { current, choices -> ReportLoad(q, current, choices) }
+        .onStart { emit(ReportLoad(query = q, isLoading = true)) }
+        .catch { failure ->
+            emit(ReportLoad(query = q, error = failure.message ?: "Reports could not be loaded."))
+        }
 }
 
 private fun ProductEntity.filterOption(): ReportFilterOption =

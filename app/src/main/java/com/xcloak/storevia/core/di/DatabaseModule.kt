@@ -24,6 +24,7 @@ object DatabaseModule {
                 StorviaDatabase.MIGRATION_5_6,
                 StorviaDatabase.MIGRATION_6_7,
                 StorviaDatabase.MIGRATION_7_8,
+                StorviaDatabase.MIGRATION_8_9,
             )
             .build()
 

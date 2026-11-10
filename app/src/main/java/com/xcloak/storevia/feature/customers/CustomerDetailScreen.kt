@@ -24,6 +24,8 @@ import com.xcloak.storevia.core.ui.can
 import com.xcloak.storevia.core.ui.LoadingState
 import com.xcloak.storevia.core.database.entity.LedgerType
 import com.xcloak.storevia.core.database.entity.PaymentMethod
+import com.xcloak.storevia.core.database.entity.SaleEntity
+import com.xcloak.storevia.core.database.entity.SaleStatus
 import com.xcloak.storevia.core.money.Money
 import com.xcloak.storevia.core.util.Parsing
 import kotlinx.coroutines.launch
@@ -77,7 +79,7 @@ fun CustomerDetailScreen(onBack: () -> Unit, onOpenSale: (String) -> Unit, vm: C
             d.customer.phone?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
 
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (can(Permission.RECEIVE_KHATA_PAYMENT)) {
+                if (!d.cloudLimited && can(Permission.RECEIVE_KHATA_PAYMENT)) {
                     Button(onClick = { paying = true }, enabled = d.balancePaise > 0, modifier = Modifier.weight(1f)) {
                         Text(stringResource(R.string.receive_payment))
                     }
@@ -93,13 +95,37 @@ fun CustomerDetailScreen(onBack: () -> Unit, onOpenSale: (String) -> Unit, vm: C
             if (can(Permission.MANAGE_CUSTOMERS) && can(Permission.EDIT_CREDIT_LIMIT)) {
                 TextButton(onClick = { oldBalance = true }) { Text(stringResource(R.string.add_old_balance)) }
             }
-            Text(stringResource(R.string.ledger_title), style = MaterialTheme.typography.titleMedium)
         }
 
-        if (d.ledger.isEmpty()) {
-            Text(stringResource(R.string.ledger_empty), Modifier.padding(16.dp), style = MaterialTheme.typography.bodyMedium)
-        } else {
-            LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 24.dp)) {
+        LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(bottom = 24.dp)) {
+            if (d.cloudLimited) {
+                item {
+                    Text(
+                        "Cloud sales history and khata settlement are not available yet.",
+                        Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                }
+            } else {
+                item {
+                    Text("Sales history", Modifier.padding(start = 16.dp, top = 12.dp, bottom = 4.dp), style = MaterialTheme.typography.titleMedium)
+                }
+                if (d.sales.isEmpty()) {
+                    item { Text("No sales yet", Modifier.padding(horizontal = 16.dp, vertical = 8.dp), style = MaterialTheme.typography.bodyMedium) }
+                } else {
+                    items(d.sales, key = { "sale-${it.id}" }) { sale ->
+                        CustomerSaleHistoryItem(sale, onClick = { onOpenSale(sale.id) })
+                        HorizontalDivider()
+                    }
+                }
+            }
+
+            item {
+                Text(stringResource(R.string.ledger_title), Modifier.padding(start = 16.dp, top = 16.dp, bottom = 4.dp), style = MaterialTheme.typography.titleMedium)
+            }
+            if (d.ledger.isEmpty()) {
+                item { Text(stringResource(R.string.ledger_empty), Modifier.padding(horizontal = 16.dp, vertical = 8.dp), style = MaterialTheme.typography.bodyMedium) }
+            } else {
                 items(d.ledger, key = { it.entry.id }) { row ->
                     val e = row.entry
                     val label = when (e.type) {
@@ -109,7 +135,7 @@ fun CustomerDetailScreen(onBack: () -> Unit, onOpenSale: (String) -> Unit, vm: C
                         LedgerType.ADJUSTMENT -> R.string.ledger_adjustment
                     }
                     ListItem(
-                        modifier = if (e.refType == "SALE" && e.refId != null) Modifier.clickable { onOpenSale(e.refId) } else Modifier,
+                        modifier = if (!d.cloudLimited && e.refType == "SALE" && e.refId != null) Modifier.clickable { onOpenSale(e.refId) } else Modifier,
                         headlineContent = { Text(stringResource(label)) },
                         supportingContent = {
                             Text(Instant.ofEpochMilli(e.createdAt).atZone(ZoneId.systemDefault()).format(DATE) + " · " +
@@ -133,6 +159,42 @@ fun CustomerDetailScreen(onBack: () -> Unit, onOpenSale: (String) -> Unit, vm: C
     if (editing && d != null && can(Permission.MANAGE_CUSTOMERS)) {
         CustomerFormDialog(d.customer, canEditLimit = can(Permission.EDIT_CREDIT_LIMIT), onSave = { n, p, l -> vm.update(n, p, l) }, onDismiss = { editing = false })
     }
+}
+
+@Composable
+private fun CustomerSaleHistoryItem(sale: SaleEntity, onClick: () -> Unit) {
+    val due = (sale.totalPaise - sale.returnedPaise - sale.paidPaise).coerceAtLeast(0)
+    val paymentState = when {
+        sale.status == SaleStatus.CANCELLED || sale.status == SaleStatus.RETURNED -> null
+        due == 0L -> R.string.receipt_status_paid
+        else -> R.string.receipt_status_due
+    }
+    val returnState = when (sale.status) {
+        SaleStatus.CANCELLED -> R.string.status_cancelled
+        SaleStatus.PARTIAL_RETURN -> R.string.status_partial_return
+        SaleStatus.RETURNED -> R.string.status_returned
+        SaleStatus.COMPLETED -> null
+    }
+
+    ListItem(
+        modifier = Modifier.clickable(onClick = onClick),
+        headlineContent = { Text(stringResource(R.string.invoice_label, sale.invoiceNo)) },
+        supportingContent = {
+            Column {
+                Text(Instant.ofEpochMilli(sale.createdAt).atZone(ZoneId.systemDefault()).format(DATE))
+                if (paymentState != null) {
+                    Text(stringResource(paymentState))
+                    Text(stringResource(R.string.paid_total, Money(sale.paidPaise).format()))
+                    if (due > 0L) Text(stringResource(R.string.due_chip, Money(due).format()))
+                }
+                if (returnState != null) Text(stringResource(returnState))
+                if (sale.returnedPaise > 0L) {
+                    Text("${stringResource(R.string.returned_label)} · ${Money(sale.returnedPaise).format()}")
+                }
+            }
+        },
+        trailingContent = { Text(Money(sale.totalPaise).format(), style = MaterialTheme.typography.titleSmall) },
+    )
 }
 
 @Composable

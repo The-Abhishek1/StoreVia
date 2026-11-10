@@ -4,12 +4,16 @@ import com.xcloak.storevia.core.access.*
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.xcloak.storevia.R
+import com.xcloak.storevia.data.AppBootstrap
+import com.xcloak.storevia.data.cloud.CloudSettingsRepository
 import com.xcloak.storevia.core.database.dao.StoreDao
 import com.xcloak.storevia.core.database.entity.StoreEntity
 import com.xcloak.storevia.core.util.GstinValidator
 import com.xcloak.storevia.data.prefs.AppPrefs
+import com.xcloak.storevia.data.prefs.StorageMode
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -34,7 +38,14 @@ data class StoreSettingsUi(
     /** Invoice numbers can't go backwards: that would create duplicates. */
     val minNextInvoiceNo: Long = 1,
     val errors: Map<String, Int> = emptyMap(),
+    val cloudMode: Boolean = false,
+    val loading: Boolean = true,
+    val loadError: Int? = null,
+    val saveError: Int? = null,
 )
+
+internal fun shouldUseLocalCloudRegistrationDraft(storageMode: StorageMode?, cloudStoreId: String?): Boolean =
+    storageMode == StorageMode.CLOUD && cloudStoreId == null
 
 @HiltViewModel
 class StoreSettingsViewModel @Inject constructor(
@@ -42,34 +53,76 @@ class StoreSettingsViewModel @Inject constructor(
     private val appPrefs: AppPrefs,
     private val access: Access,
     private val audit: AuditSink,
+    private val cloudSettings: CloudSettingsRepository,
+    private val bootstrap: AppBootstrap,
 ) : ViewModel() {
     private val _ui = MutableStateFlow(StoreSettingsUi())
     val ui: StateFlow<StoreSettingsUi> = _ui.asStateFlow()
     private val _saved = Channel<Unit>(Channel.BUFFERED)
     val saved = _saved.receiveAsFlow()
+    private val reload = MutableStateFlow(0)
 
     private var original: StoreEntity? = null
+    private var cloudRegistrationDraft = false
 
     init {
         viewModelScope.launch {
-            val s = storeDao.get() ?: return@launch
-            original = s
-            _ui.value = StoreSettingsUi(
-                loaded = true,
-                form = StoreForm(
-                    name = if (s.name == DEFAULT_NAME) "" else s.name, ownerName = s.ownerName,
-                    address = s.address, city = s.city, phone = s.phone,
-                    gstin = s.gstin.orEmpty(), stateCode = s.stateCode, invoicePrefix = s.invoicePrefix,
-                    nextInvoiceNo = s.nextInvoiceNo.toString(),
-                    deviceSeries = appPrefs.settings.value.deviceSeries,
-                    allowNegativeStock = s.allowNegativeStock,
-                ),
-                minNextInvoiceNo = s.nextInvoiceNo,
-            )
+            combine(appPrefs.settings.map { it.storageMode }.distinctUntilChanged(), reload) { mode, _ -> mode }
+                .collectLatest { mode ->
+                _ui.value = StoreSettingsUi(cloudMode = mode == StorageMode.CLOUD, loading = true)
+                original = null
+                try {
+                    cloudRegistrationDraft = shouldUseLocalCloudRegistrationDraft(
+                        mode,
+                        appPrefs.settings.value.cloudStoreId,
+                    )
+                    if (cloudRegistrationDraft) bootstrap.ensureSeeded(force = true)
+                    val s = if (mode == StorageMode.CLOUD && !cloudRegistrationDraft) {
+                        cloudSettings.loadStore()
+                    } else {
+                        storeDao.get()
+                    }
+                    if (s == null) {
+                        _ui.update {
+                            it.copy(loading = false, loadError = R.string.err_store_unavailable)
+                        }
+                        return@collectLatest
+                    }
+                    original = s
+                    _ui.value = StoreSettingsUi(
+                        loaded = true,
+                        form = StoreForm(
+                            name = if (s.name == DEFAULT_NAME) "" else s.name, ownerName = s.ownerName,
+                            address = s.address, city = s.city, phone = s.phone,
+                            gstin = s.gstin.orEmpty(), stateCode = s.stateCode, invoicePrefix = s.invoicePrefix,
+                            nextInvoiceNo = s.nextInvoiceNo.toString(),
+                            deviceSeries = appPrefs.settings.value.deviceSeries,
+                            allowNegativeStock = s.allowNegativeStock,
+                        ),
+                        minNextInvoiceNo = s.nextInvoiceNo,
+                        cloudMode = mode == StorageMode.CLOUD,
+                        loading = false,
+                    )
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    _ui.update {
+                        it.copy(
+                            loaded = false,
+                            loading = false,
+                            loadError = R.string.cloud_settings_load_failed,
+                        )
+                    }
+                }
+            }
         }
     }
 
-    fun update(block: StoreForm.() -> StoreForm) = _ui.update { it.copy(form = it.form.block(), errors = emptyMap()) }
+    fun refresh() { reload.update { it + 1 } }
+
+    fun update(block: StoreForm.() -> StoreForm) = _ui.update {
+        it.copy(form = it.form.block(), errors = emptyMap(), saveError = null)
+    }
 
     fun clearCloudRegistrationDetails() = _ui.update {
         it.copy(
@@ -83,6 +136,7 @@ class StoreSettingsViewModel @Inject constructor(
                 stateCode = "",
             ),
             errors = emptyMap(),
+            saveError = null,
         )
     }
 
@@ -127,54 +181,84 @@ class StoreSettingsViewModel @Inject constructor(
 
         viewModelScope.launch {
             val now = System.currentTimeMillis()
-            val updated = storeDao.updateSettings(
-                id = base.id,
-                name = f.name.trim(),
-                ownerName = f.ownerName.trim(),
-                address = f.address.trim(),
-                city = f.city.trim(),
-                phone = f.phone.trim(),
-                gstin = gstin,
-                stateCode = f.stateCode,
-                invoicePrefix = prefix,
-                nextInvoiceNo = nextInvoiceNumber,
-                allowNegativeStock = f.allowNegativeStock,
-                updatedAt = now,
-            )
-            if (updated == 0) {
-                val latest = storeDao.get()
-                if (latest != null) {
-                    _ui.update {
-                        it.copy(
-                            minNextInvoiceNo = latest.nextInvoiceNo,
-                            errors = mapOf("next" to R.string.err_next_invoice),
-                        )
-                    }
+            try {
+                val updated = if (_ui.value.cloudMode && !cloudRegistrationDraft) {
+                    cloudSettings.saveStore(
+                        name = f.name.trim(),
+                        ownerName = f.ownerName.trim(),
+                        address = f.address.trim(),
+                        city = f.city.trim(),
+                        phone = f.phone.trim(),
+                        gstin = gstin,
+                        stateCode = f.stateCode,
+                        invoicePrefix = prefix,
+                        allowNegativeStock = f.allowNegativeStock,
+                    )
                 } else {
-                    _ui.update { it.copy(errors = mapOf("name" to R.string.err_store_unavailable)) }
+                    val count = storeDao.updateSettings(
+                        id = base.id,
+                        name = f.name.trim(),
+                        ownerName = f.ownerName.trim(),
+                        address = f.address.trim(),
+                        city = f.city.trim(),
+                        phone = f.phone.trim(),
+                        gstin = gstin,
+                        stateCode = f.stateCode,
+                        invoicePrefix = prefix,
+                        nextInvoiceNo = nextInvoiceNumber,
+                        allowNegativeStock = f.allowNegativeStock,
+                        updatedAt = now,
+                    )
+                    if (count == 0) {
+                        val latest = storeDao.get()
+                        if (latest != null) {
+                            _ui.update {
+                                it.copy(
+                                    minNextInvoiceNo = latest.nextInvoiceNo,
+                                    errors = mapOf("next" to R.string.err_next_invoice),
+                                )
+                            }
+                        } else {
+                            _ui.update { it.copy(errors = mapOf("name" to R.string.err_store_unavailable)) }
+                        }
+                        return@launch
+                    }
+                    storeDao.get() ?: base.copy(
+                        name = f.name.trim(), ownerName = f.ownerName.trim(), address = f.address.trim(),
+                        city = f.city.trim(), phone = f.phone.trim(), gstin = gstin,
+                        stateCode = f.stateCode, invoicePrefix = prefix, nextInvoiceNo = nextInvoiceNumber,
+                        allowNegativeStock = f.allowNegativeStock, updatedAt = now, dirty = true,
+                    )
                 }
-                return@launch
+                val changes = buildList {
+                    if (base.name != f.name.trim()) add("name")
+                    if (base.ownerName != f.ownerName.trim() || base.address != f.address.trim() ||
+                        base.city != f.city.trim() || base.phone != f.phone.trim()
+                    ) add("business details")
+                    if (base.gstin != gstin) add("GSTIN")
+                    if (base.stateCode != f.stateCode) add("state")
+                    if (base.invoicePrefix != prefix || (! _ui.value.cloudMode && base.nextInvoiceNo != nextInvoiceNumber)) add("invoice numbering")
+                    if (previousDeviceSeries != deviceSeries) add("device invoice series")
+                    if (base.allowNegativeStock != f.allowNegativeStock) add("selling out-of-stock items")
+                }
+                if (!_ui.value.cloudMode && changes.isNotEmpty()) {
+                    audit.log(AuditAction.SETTINGS_CHANGED, "Store settings changed: ${changes.joinToString(", ")}")
+                }
+                appPrefs.update { copy(deviceSeries = deviceSeries) }
+                original = updated
+                _ui.update {
+                    it.copy(
+                        minNextInvoiceNo = updated.nextInvoiceNo,
+                        form = it.form.copy(nextInvoiceNo = updated.nextInvoiceNo.toString()),
+                        errors = emptyMap(),
+                    )
+                }
+                _saved.send(Unit)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                _ui.update { it.copy(saveError = R.string.cloud_settings_save_failed) }
             }
-            val changes = buildList {
-                if (base.name != f.name.trim()) add("name")
-                if (base.ownerName != f.ownerName.trim() || base.address != f.address.trim() ||
-                    base.city != f.city.trim() || base.phone != f.phone.trim()
-                ) add("business details")
-                if (base.gstin != gstin) add("GSTIN")
-                if (base.stateCode != f.stateCode) add("state")
-                if (base.invoicePrefix != prefix || base.nextInvoiceNo != nextInvoiceNumber) add("invoice numbering")
-                if (previousDeviceSeries != deviceSeries) add("device invoice series")
-                if (base.allowNegativeStock != f.allowNegativeStock) add("selling out-of-stock items")
-            }
-            if (changes.isNotEmpty()) audit.log(AuditAction.SETTINGS_CHANGED, "Store settings changed: ${changes.joinToString(", ")}")
-            appPrefs.update { copy(deviceSeries = deviceSeries) }
-            original = storeDao.get() ?: base.copy(
-                name = f.name.trim(), ownerName = f.ownerName.trim(), address = f.address.trim(),
-                city = f.city.trim(), phone = f.phone.trim(), gstin = gstin,
-                stateCode = f.stateCode, invoicePrefix = prefix, nextInvoiceNo = nextInvoiceNumber,
-                allowNegativeStock = f.allowNegativeStock, updatedAt = now, dirty = true,
-            )
-            _saved.send(Unit)
         }
     }
 

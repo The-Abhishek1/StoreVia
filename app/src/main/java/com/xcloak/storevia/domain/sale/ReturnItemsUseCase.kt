@@ -51,11 +51,15 @@ class ReturnItemsUseCase @Inject constructor(
     private val access: Access = OwnerAccess,
     private val audit: AuditSink = NoAudit,
     private val serialNumberDao: SerialNumberDao = db.serialNumberDao(),
+    private val cloudOperations: SalesInventoryOperations = LocalSalesInventoryOperations,
 ) {
     private class Piece(val line: SaleLineEntity, val qtyMilli: Long, val amountPaise: Long)
     private class Computed(val sale: SaleEntity, val lines: List<SaleLineEntity>, val pieces: List<Piece>, val preview: ReturnPreview)
 
-    suspend fun preview(saleId: String, items: List<ReturnItem>): ReturnPreview = compute(saleId, items).preview
+    suspend fun preview(saleId: String, items: List<ReturnItem>): ReturnPreview {
+        if (cloudOperations.isCloudMode()) return cloudOperations.previewReturn(saleId, items)
+        return compute(saleId, items).preview
+    }
 
     suspend operator fun invoke(
         saleId: String,
@@ -64,8 +68,10 @@ class ReturnItemsUseCase @Inject constructor(
         now: Long = System.currentTimeMillis(),
         /** false when another action (cancel bill) writes its own audit entry. */
         logAudit: Boolean = true,
-    ): String = db.withTransaction {
+    ): String {
         access.require(Permission.PROCESS_RETURN)
+        if (cloudOperations.isCloudMode()) return cloudOperations.returnItems(saleId, items, refund, now)
+        return db.withTransaction {
         val c = compute(saleId, items)
         val sale = c.sale
         val pv = c.preview
@@ -179,6 +185,7 @@ class ReturnItemsUseCase @Inject constructor(
         )
         if (logAudit) audit.log(AuditAction.RETURN, "Return ${Rupees(pv.totalPaise).format()} on ${sale.invoiceNo}", "SALE", saleId)
         returnId
+        }
     }
 
     private suspend fun compute(saleId: String, items: List<ReturnItem>): Computed {

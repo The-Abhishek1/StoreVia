@@ -2,6 +2,7 @@ package com.xcloak.storevia.domain.sale
 
 import androidx.room.withTransaction
 import com.xcloak.storevia.core.access.*
+import com.xcloak.storevia.data.cloud.CloudPurchaseRepository
 import com.xcloak.storevia.core.util.Parsing
 import com.xcloak.storevia.core.database.StorviaDatabase
 import com.xcloak.storevia.core.database.dao.BatchDao
@@ -23,6 +24,7 @@ class ReceiveStockUseCase @Inject constructor(
     private val access: Access = OwnerAccess,
     private val audit: AuditSink = NoAudit,
     private val serialNumberDao: SerialNumberDao = db.serialNumberDao(),
+    private val cloudPurchases: CloudPurchaseRepository? = null,
 ) {
     suspend operator fun invoke(
         productId: String, qtyMilli: Long, costPaise: Long,
@@ -32,6 +34,18 @@ class ReceiveStockUseCase @Inject constructor(
     ): String {
         access.require(Permission.MANAGE_PURCHASES)
         require(qtyMilli > 0) { "Quantity must be positive" }
+        cloudPurchases?.takeIf { it.isCloudMode() }?.let {
+            return it.receiveStock(
+                productId = productId,
+                qtyMilli = qtyMilli,
+                costPaise = costPaise,
+                batchNo = batchNo,
+                expiryDate = expiryDate,
+                mrpPaise = mrpPaise,
+                type = type,
+                serialNumbers = serialNumbers,
+            )
+        }
         return db.withTransaction {
             val branchId = db.branchDao().activeBranchId()
             val product = db.productDao().getById(productId) ?: throw IllegalArgumentException("Product not found")

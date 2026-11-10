@@ -7,14 +7,21 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.xcloak.storevia.R
 import com.xcloak.storevia.core.database.dao.CustomerDao
+import com.xcloak.storevia.core.database.dao.SaleDao
 import com.xcloak.storevia.core.database.dao.StoreDao
 import com.xcloak.storevia.core.database.entity.CustomerEntity
 import com.xcloak.storevia.core.database.entity.CustomerLedgerEntity
 import com.xcloak.storevia.core.database.entity.LedgerType
 import com.xcloak.storevia.core.database.entity.PaymentMethod
+import com.xcloak.storevia.core.database.entity.SaleEntity
 import com.xcloak.storevia.core.util.Parsing
 import com.xcloak.storevia.domain.customer.KhataException
 import com.xcloak.storevia.domain.customer.ReceivePaymentUseCase
+import com.xcloak.storevia.data.cloud.CloudPartyRepository
+import com.xcloak.storevia.domain.customer.CloudCustomerPaymentException
+import com.xcloak.storevia.data.prefs.AppPrefs
+import com.xcloak.storevia.data.prefs.StorageMode
+import com.xcloak.storevia.data.prefs.StorageModeRouter
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import javax.inject.Inject
@@ -26,7 +33,10 @@ data class CustomerDetailUi(
     val balancePaise: Long,
     /** Newest first. */
     val ledger: List<LedgerRow>,
+    /** Newest first; independent from khata ledger entries. */
+    val sales: List<SaleEntity>,
     val storeName: String,
+    val cloudLimited: Boolean = false,
 ) {
     val reminderText: String get() = KhataText.reminder(storeName, customer.name, balancePaise)
 }
@@ -37,26 +47,45 @@ data class CustomerDetailState(val loaded: Boolean = false, val detail: Customer
 class CustomerDetailViewModel @Inject constructor(
     handle: SavedStateHandle,
     private val customerDao: CustomerDao,
+    saleDao: SaleDao,
     storeDao: StoreDao,
     private val receivePayment: ReceivePaymentUseCase,
     private val access: Access,
     private val audit: AuditSink,
+    private val cloud: CloudPartyRepository,
+    private val prefs: AppPrefs,
 ) : ViewModel() {
 
     private val id: String = checkNotNull(handle["id"])
 
-    val ui: StateFlow<CustomerDetailState> = combine(
-        customerDao.observeById(id), customerDao.observeLedger(id), storeDao.observe(),
-    ) { customer, ledger, store ->
-        if (customer == null) CustomerDetailState(loaded = true) else {
-            var running = 0L
-            val rows = ledger.map { e -> running += e.amountPaise; LedgerRow(e, running) }
-            CustomerDetailState(
-                loaded = true,
-                detail = CustomerDetailUi(customer, running, rows.asReversed(), store?.name.orEmpty()),
-            )
-        }
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), CustomerDetailState())
+    val ui: StateFlow<CustomerDetailState> = StorageModeRouter.observe(
+        prefs.settings.map { it.storageMode },
+        local = {
+            combine(customerDao.observeById(id), customerDao.observeLedger(id), saleDao.observeCustomerSales(id), storeDao.observe()) {
+                    customer, ledger, sales, store ->
+                if (customer == null) CustomerDetailState(loaded = true) else {
+                    var running = 0L
+                    val rows = ledger.map { entry -> running += entry.amountPaise; LedgerRow(entry, running) }
+                    CustomerDetailState(
+                        loaded = true,
+                        detail = CustomerDetailUi(customer, running, rows.asReversed(), sales, store?.name.orEmpty()),
+                    )
+                }
+            }.onStart { emit(CustomerDetailState()) }
+        },
+        cloud = {
+            cloud.observeCustomer(id).map { (customer, ledger) ->
+                if (customer == null) CustomerDetailState(loaded = true) else {
+                    var running = 0L
+                    val rows = ledger.map { entry -> running += entry.amountPaise; LedgerRow(entry, running) }
+                    CustomerDetailState(
+                        loaded = true,
+                        detail = CustomerDetailUi(customer, running, rows.asReversed(), emptyList(), "", cloudLimited = true),
+                    )
+                }
+            }.onStart { emit(CustomerDetailState()) }
+        },
+    ).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), CustomerDetailState())
 
     /** @return a string-resource id for the problem, or null on success. */
     suspend fun receive(amountText: String, method: PaymentMethod): Int? {
@@ -72,6 +101,8 @@ class CustomerDetailViewModel @Inject constructor(
             }
         } catch (e: PermissionDeniedException) {
             R.string.err_permission_denied
+        } catch (e: CloudCustomerPaymentException) {
+            R.string.err_generic
         }
     }
 
@@ -81,14 +112,23 @@ class CustomerDetailViewModel @Inject constructor(
         if (!access.actor().can(Permission.MANAGE_CUSTOMERS) ||
             !access.actor().can(Permission.EDIT_CREDIT_LIMIT)
         ) return R.string.err_permission_denied
-        val customer = customerDao.getById(id) ?: return R.string.customer_unavailable
+        val customer = StorageModeRouter.routeSuspend(
+            prefs.settings.value.storageMode,
+            local = { customerDao.getById(id) },
+            cloud = { cloud.getCustomer(id) },
+        ) ?: return R.string.customer_unavailable
         if (!access.actor().can(Permission.MANAGE_CUSTOMERS) ||
             !access.actor().can(Permission.EDIT_CREDIT_LIMIT)
         ) return R.string.err_permission_denied
-        customerDao.insertLedger(
-            CustomerLedgerEntity(customerId = id, type = LedgerType.ADJUSTMENT, amountPaise = amount, refType = "MANUAL")
+        val entry = CustomerLedgerEntity(customerId = id, type = LedgerType.ADJUSTMENT, amountPaise = amount, refType = "MANUAL")
+        StorageModeRouter.routeSuspend(
+            prefs.settings.value.storageMode,
+            local = {
+                customerDao.insertLedger(entry)
+                audit.log(AuditAction.OLD_BALANCE_ADDED, "Old balance ${Money(amount).format()} added for ${customer.name}", "CUSTOMER", id)
+            },
+            cloud = { cloud.addCustomerLedger(entry) },
         )
-        audit.log(AuditAction.OLD_BALANCE_ADDED, "Old balance ${Money(amount).format()} added for ${customer.name}", "CUSTOMER", id)
         return null
     }
 
@@ -97,17 +137,24 @@ class CustomerDetailViewModel @Inject constructor(
         if (!access.actor().can(Permission.MANAGE_CUSTOMERS)) return false
         val current = ui.value.detail?.customer ?: return false
         val limit = if (limitText.isBlank()) null else (Parsing.moneyToPaise(limitText) ?: return false)
-        val fresh = customerDao.getById(current.id) ?: return false
+        val fresh = StorageModeRouter.routeSuspend(
+            prefs.settings.value.storageMode,
+            local = { customerDao.getById(current.id) },
+            cloud = { cloud.getCustomer(current.id) },
+        ) ?: return false
         if (!access.actor().can(Permission.MANAGE_CUSTOMERS)) return false
         val limitChanged = limit != fresh.creditLimitPaise
         if (limitChanged && !access.actor().can(Permission.EDIT_CREDIT_LIMIT)) return false
-        if (limitChanged) audit.log(AuditAction.CREDIT_LIMIT_CHANGED,
+        if (limitChanged && prefs.settings.value.storageMode != StorageMode.CLOUD) audit.log(AuditAction.CREDIT_LIMIT_CHANGED,
             "${fresh.name}: credit limit ${fresh.creditLimitPaise?.let { Money(it).format() } ?: "none"} -> ${limit?.let { Money(it).format() } ?: "none"}", "CUSTOMER", fresh.id)
-        customerDao.update(
-            fresh.copy(
+        val updated = fresh.copy(
                 name = name.trim(), phone = phone.trim().ifEmpty { null }, creditLimitPaise = limit,
                 updatedAt = System.currentTimeMillis(), dirty = true,
             )
+        StorageModeRouter.routeSuspend(
+            prefs.settings.value.storageMode,
+            local = { customerDao.update(updated) },
+            cloud = { cloud.updateCustomer(updated) },
         )
         return true
     }

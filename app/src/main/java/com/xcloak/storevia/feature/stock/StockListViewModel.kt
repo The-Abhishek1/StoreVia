@@ -2,12 +2,11 @@ package com.xcloak.storevia.feature.stock
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.xcloak.storevia.core.database.dao.CategoryDao
 import com.xcloak.storevia.core.database.dao.BranchDao
-import com.xcloak.storevia.core.database.dao.ProductDao
 import com.xcloak.storevia.core.database.dao.ProductListRow
 import com.xcloak.storevia.core.database.dao.observeActiveBranchId
 import com.xcloak.storevia.core.database.entity.CategoryEntity
+import com.xcloak.storevia.data.product.ProductCatalogRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.*
@@ -17,8 +16,7 @@ import javax.inject.Inject
 @OptIn(ExperimentalCoroutinesApi::class)
 @HiltViewModel
 class StockListViewModel @Inject constructor(
-    productDao: ProductDao,
-    categoryDao: CategoryDao,
+    catalog: ProductCatalogRepository,
     branchDao: BranchDao,
 ) : ViewModel() {
 
@@ -28,8 +26,16 @@ class StockListViewModel @Inject constructor(
     private val _category = MutableStateFlow<String?>(null)
     val category: StateFlow<String?> = _category.asStateFlow()
 
-    val categories: StateFlow<List<CategoryEntity>> =
-        categoryDao.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    private val _categoryError = MutableStateFlow<String?>(null)
+    private val _productError = MutableStateFlow<String?>(null)
+    val catalogError: StateFlow<String?> = combine(_productError, _categoryError) { product, category ->
+        product ?: category
+    }.stateIn(viewModelScope, SharingStarted.Eagerly, null)
+
+    val categories: StateFlow<List<CategoryEntity>> = catalog.observeCategories()
+        .onEach { _categoryError.value = null }
+        .catch { _categoryError.value = it.message ?: "Cloud categories could not be loaded."; emit(emptyList()) }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     private val activeBranchId = branchDao.observeActiveBranchId()
     val activeBranchName: StateFlow<String?> = combine(branchDao.observeAll(), activeBranchId) { branches, branchId ->
@@ -39,14 +45,16 @@ class StockListViewModel @Inject constructor(
     val rows: StateFlow<List<ProductListRow>?> = combine(_query, _category, activeBranchId.filterNotNull()) { q, c, branchId ->
         Triple(q.trim(), c, branchId)
     }.flatMapLatest { (q, c, branchId) ->
-        if (c == null) productDao.listWithStock(q, branchId) else productDao.listWithStockByCategory(q, c, branchId)
+        catalog.observeStockRows(q, c, branchId)
+            .onEach { _productError.value = null }
+            .catch { _productError.value = it.message ?: "Cloud products could not be loaded."; emit(emptyList()) }
     }
         .map<List<ProductListRow>, List<ProductListRow>?> { it }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     init {
         viewModelScope.launch {
-            categoryDao.observeAll().collect { list -> if (_category.value != null && list.none { it.id == _category.value }) _category.value = null }
+            categories.collect { list -> if (_category.value != null && list.none { it.id == _category.value }) _category.value = null }
         }
     }
 

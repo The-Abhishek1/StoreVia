@@ -33,6 +33,7 @@ fun ProductEditScreen(
     val ui by vm.ui.collectAsStateWithLifecycle()
     val units by vm.units.collectAsStateWithLifecycle()
     val categories by vm.categories.collectAsStateWithLifecycle()
+    val catalogError by vm.catalogError.collectAsStateWithLifecycle()
     val features by vm.features.collectAsStateWithLifecycle()
     val attributePresets by vm.attributePresets.collectAsStateWithLifecycle()
     val f = ui.form
@@ -68,6 +69,9 @@ fun ProductEditScreen(
             Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            (ui.cloudError ?: catalogError)?.let {
+                Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodyMedium)
+            }
             Field(f.name, { v -> vm.update { copy(name = v) } }, R.string.field_name, errText(ui.errors["name"]))
             if (vm.isVariant) {
                 Field(

@@ -216,7 +216,8 @@ begin
 end;
 $$;
 
--- The shop the signed-in person belongs to (if any), their role, and its configured store type.
+-- All stores the signed-in person belongs to, in stable order, with their roles and configured types.
+-- Return every membership in a stable order so clients can reconnect to their persisted selection.
 drop function if exists public.my_store();
 create function public.my_store() returns table (store_id text, role text, store_type text)
 language sql stable security definer set search_path = public as $$
@@ -224,7 +225,7 @@ language sql stable security definer set search_path = public as $$
   from public.store_members m
   left join public.platform_store_metadata meta on meta.store_id = m.store_id
   where m.user_id = auth.uid()
-  order by m.created_at limit 1;
+  order by m.created_at, m.store_id;
 $$;
 
 -- Gives this phone its invoice series. Calling again with the same device returns the same series.
@@ -333,8 +334,17 @@ create table if not exists public."store" (
   server_updated_at timestamptz not null default clock_timestamp(),
   primary key ("id")
 );
+alter table public."store" add column if not exists "name" text;
 alter table public."store" add column if not exists "owner_name" text not null default '';
+alter table public."store" add column if not exists "address" text not null default '';
 alter table public."store" add column if not exists "city" text not null default '';
+alter table public."store" add column if not exists "phone" text not null default '';
+alter table public."store" add column if not exists "gstin" text;
+alter table public."store" add column if not exists "state_code" text;
+alter table public."store" add column if not exists "invoice_prefix" text not null default 'INV';
+alter table public."store" add column if not exists "allow_negative_stock" integer not null default 1;
+alter table public."store" add column if not exists "created_at" bigint not null default (extract(epoch from clock_timestamp()) * 1000)::bigint;
+alter table public."store" add column if not exists "updated_at" bigint not null default (extract(epoch from clock_timestamp()) * 1000)::bigint;
 create index if not exists "store_sync_idx" on public."store" (store_id, server_updated_at, "id");
 drop trigger if exists touch_server_updated_at on public."store";
 create trigger touch_server_updated_at before insert or update on public."store" for each row execute function public.touch_server_updated_at();
@@ -361,6 +371,14 @@ create table if not exists public."branches" (
   server_updated_at timestamptz not null default clock_timestamp(),
   primary key ("id")
 );
+alter table public."branches" add column if not exists "name" text;
+alter table public."branches" add column if not exists "address" text not null default '';
+alter table public."branches" add column if not exists "city" text not null default '';
+alter table public."branches" add column if not exists "phone" text not null default '';
+alter table public."branches" add column if not exists "is_active" integer not null default 1;
+alter table public."branches" add column if not exists "created_at" bigint not null default (extract(epoch from clock_timestamp()) * 1000)::bigint;
+alter table public."branches" add column if not exists "updated_at" bigint not null default (extract(epoch from clock_timestamp()) * 1000)::bigint;
+alter table public."branches" add column if not exists "deleted_at" bigint;
 create unique index if not exists "branches_store_name_unique" on public."branches" (store_id, "name");
 create index if not exists "branches_sync_idx" on public."branches" (store_id, server_updated_at, "id");
 drop trigger if exists touch_server_updated_at on public."branches";
@@ -384,6 +402,10 @@ create table if not exists public."units" (
   server_updated_at timestamptz not null default clock_timestamp(),
   primary key ("id")
 );
+alter table public."units" add column if not exists "name" text;
+alter table public."units" add column if not exists "symbol" text;
+alter table public."units" add column if not exists "allow_decimal" integer;
+alter table public."units" add column if not exists "updated_at" bigint not null default (extract(epoch from clock_timestamp()) * 1000)::bigint;
 create index if not exists "units_sync_idx" on public."units" (store_id, server_updated_at, "id");
 drop trigger if exists touch_server_updated_at on public."units";
 create trigger touch_server_updated_at before insert or update on public."units" for each row execute function public.touch_server_updated_at();
@@ -406,6 +428,10 @@ create table if not exists public."categories" (
   server_updated_at timestamptz not null default clock_timestamp(),
   primary key ("id")
 );
+alter table public."categories" add column if not exists "name" text;
+alter table public."categories" add column if not exists "parent_id" text;
+alter table public."categories" add column if not exists "updated_at" bigint not null default (extract(epoch from clock_timestamp()) * 1000)::bigint;
+alter table public."categories" add column if not exists "deleted_at" bigint;
 create index if not exists "categories_sync_idx" on public."categories" (store_id, server_updated_at, "id");
 drop trigger if exists touch_server_updated_at on public."categories";
 create trigger touch_server_updated_at before insert or update on public."categories" for each row execute function public.touch_server_updated_at();
@@ -444,9 +470,26 @@ create table if not exists public."products" (
   server_updated_at timestamptz not null default clock_timestamp(),
   primary key ("id")
 );
-alter table public."products" add column if not exists "attributes_json" text not null default '{}';
+alter table public."products" add column if not exists "name" text;
 alter table public."products" add column if not exists "parent_product_id" text;
 alter table public."products" add column if not exists "variant_label" text;
+alter table public."products" add column if not exists "sku" text;
+alter table public."products" add column if not exists "category_id" text;
+alter table public."products" add column if not exists "unit_id" text;
+alter table public."products" add column if not exists "hsn_code" text;
+alter table public."products" add column if not exists "gst_rate_bp" integer not null default 0;
+alter table public."products" add column if not exists "tax_inclusive" integer not null default 1;
+alter table public."products" add column if not exists "mrp_paise" bigint;
+alter table public."products" add column if not exists "sell_price_paise" bigint;
+alter table public."products" add column if not exists "cost_paise" bigint not null default 0;
+alter table public."products" add column if not exists "track_expiry" integer not null default 0;
+alter table public."products" add column if not exists "serial_tracked" integer not null default 0;
+alter table public."products" add column if not exists "min_stock_milli" bigint not null default 0;
+alter table public."products" add column if not exists "is_active" integer not null default 1;
+alter table public."products" add column if not exists "attributes_json" text not null default '{}';
+alter table public."products" add column if not exists "created_at" bigint not null default (extract(epoch from clock_timestamp()) * 1000)::bigint;
+alter table public."products" add column if not exists "updated_at" bigint not null default (extract(epoch from clock_timestamp()) * 1000)::bigint;
+alter table public."products" add column if not exists "deleted_at" bigint;
 create index if not exists "products_sync_idx" on public."products" (store_id, server_updated_at, "id");
 drop trigger if exists touch_server_updated_at on public."products";
 create trigger touch_server_updated_at before insert or update on public."products" for each row execute function public.touch_server_updated_at();
@@ -458,6 +501,59 @@ create policy "writers insert" on public."products" for insert with check (publi
 drop policy if exists "writers update" on public."products";
 create policy "writers update" on public."products" for update using (public.can_write(store_id, array['OWNER','MANAGER'])) with check (public.can_write(store_id, array['OWNER','MANAGER']));
 
+-- batches: append-only
+create table if not exists public."batches" (
+  "id" text not null,
+  "product_id" text not null,
+  "branch_id" text not null,
+  "batch_no" text,
+  "expiry_date" text,
+  "cost_paise" bigint not null,
+  "mrp_paise" bigint,
+  "qty_received_milli" bigint not null,
+  "qty_on_hand_milli" bigint not null,
+  "received_at" bigint not null,
+  "updated_at" bigint not null,
+  "deleted_at" bigint,
+  store_id text not null,
+  server_updated_at timestamptz not null default clock_timestamp(),
+  constraint "batches_product_id_fkey" foreign key ("product_id") references public."products" ("id"),
+  primary key ("id")
+);
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'batches_product_id_fkey' and conrelid = 'public."batches"'::regclass
+  ) then
+    alter table public."batches" add constraint "batches_product_id_fkey"
+      foreign key ("product_id") references public."products" ("id");
+  end if;
+end;
+$$;
+alter table public."batches" add column if not exists "product_id" text;
+alter table public."batches" add column if not exists "branch_id" text not null default 'default';
+alter table public."batches" add column if not exists "batch_no" text;
+alter table public."batches" add column if not exists "expiry_date" text;
+alter table public."batches" add column if not exists "cost_paise" bigint not null default 0;
+alter table public."batches" add column if not exists "mrp_paise" bigint;
+alter table public."batches" add column if not exists "qty_received_milli" bigint;
+alter table public."batches" add column if not exists "qty_on_hand_milli" bigint;
+alter table public."batches" add column if not exists "received_at" bigint not null default (extract(epoch from clock_timestamp()) * 1000)::bigint;
+alter table public."batches" add column if not exists "updated_at" bigint not null default (extract(epoch from clock_timestamp()) * 1000)::bigint;
+alter table public."batches" add column if not exists "deleted_at" bigint;
+alter table public."batches" add column if not exists "branch_id" text not null default 'default';
+update public."batches" set "branch_id" = store_id where "branch_id" = 'default';
+create index if not exists "batches_branch_idx" on public."batches" (store_id, "branch_id");
+create index if not exists "batches_sync_idx" on public."batches" (store_id, server_updated_at, "id");
+drop trigger if exists touch_server_updated_at on public."batches";
+create trigger touch_server_updated_at before insert or update on public."batches" for each row execute function public.touch_server_updated_at();
+alter table public."batches" enable row level security;
+drop policy if exists "members read" on public."batches";
+create policy "members read" on public."batches" for select using (public.is_member(store_id));
+drop policy if exists "writers insert" on public."batches";
+create policy "writers insert" on public."batches" for insert with check (public.can_write(store_id, array['OWNER','MANAGER']));
+
 -- recipe_components: mutable
 create table if not exists public."recipe_components" (
   "id" text not null,
@@ -468,8 +564,37 @@ create table if not exists public."recipe_components" (
   "deleted_at" bigint,
   store_id text not null,
   server_updated_at timestamptz not null default clock_timestamp(),
+  constraint "recipe_components_recipe_product_id_fkey" foreign key ("recipe_product_id") references public."products" ("id") on delete cascade,
+  constraint "recipe_components_ingredient_product_id_fkey" foreign key ("ingredient_product_id") references public."products" ("id") on delete cascade,
   primary key ("id")
 );
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'recipe_components_recipe_product_id_fkey' and conrelid = 'public."recipe_components"'::regclass
+  ) then
+    alter table public."recipe_components" add constraint "recipe_components_recipe_product_id_fkey"
+      foreign key ("recipe_product_id") references public."products" ("id") on delete cascade;
+  end if;
+end;
+$$;
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'recipe_components_ingredient_product_id_fkey' and conrelid = 'public."recipe_components"'::regclass
+  ) then
+    alter table public."recipe_components" add constraint "recipe_components_ingredient_product_id_fkey"
+      foreign key ("ingredient_product_id") references public."products" ("id") on delete cascade;
+  end if;
+end;
+$$;
+alter table public."recipe_components" add column if not exists "recipe_product_id" text;
+alter table public."recipe_components" add column if not exists "ingredient_product_id" text;
+alter table public."recipe_components" add column if not exists "quantity_per_unit_milli" bigint;
+alter table public."recipe_components" add column if not exists "updated_at" bigint not null default (extract(epoch from clock_timestamp()) * 1000)::bigint;
+alter table public."recipe_components" add column if not exists "deleted_at" bigint;
 create index if not exists "recipe_components_sync_idx" on public."recipe_components" (store_id, server_updated_at, "id");
 drop trigger if exists touch_server_updated_at on public."recipe_components";
 create trigger touch_server_updated_at before insert or update on public."recipe_components" for each row execute function public.touch_server_updated_at();
@@ -493,8 +618,39 @@ create table if not exists public."serial_numbers" (
   "deleted_at" bigint,
   store_id text not null,
   server_updated_at timestamptz not null default clock_timestamp(),
+  constraint "serial_numbers_product_id_fkey" foreign key ("product_id") references public."products" ("id") on delete cascade,
+  constraint "serial_numbers_batch_id_fkey" foreign key ("batch_id") references public."batches" ("id") on delete cascade,
   primary key ("id")
 );
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'serial_numbers_product_id_fkey' and conrelid = 'public."serial_numbers"'::regclass
+  ) then
+    alter table public."serial_numbers" add constraint "serial_numbers_product_id_fkey"
+      foreign key ("product_id") references public."products" ("id") on delete cascade;
+  end if;
+end;
+$$;
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'serial_numbers_batch_id_fkey' and conrelid = 'public."serial_numbers"'::regclass
+  ) then
+    alter table public."serial_numbers" add constraint "serial_numbers_batch_id_fkey"
+      foreign key ("batch_id") references public."batches" ("id") on delete cascade;
+  end if;
+end;
+$$;
+alter table public."serial_numbers" add column if not exists "product_id" text;
+alter table public."serial_numbers" add column if not exists "batch_id" text;
+alter table public."serial_numbers" add column if not exists "serial_number" text;
+alter table public."serial_numbers" add column if not exists "status" text not null default 'AVAILABLE';
+alter table public."serial_numbers" add column if not exists "sale_line_id" text;
+alter table public."serial_numbers" add column if not exists "updated_at" bigint not null default (extract(epoch from clock_timestamp()) * 1000)::bigint;
+alter table public."serial_numbers" add column if not exists "deleted_at" bigint;
 create unique index if not exists "serial_numbers_store_serial_unique" on public."serial_numbers" (store_id, "serial_number");
 create index if not exists "serial_numbers_sync_idx" on public."serial_numbers" (store_id, server_updated_at, "id");
 drop trigger if exists touch_server_updated_at on public."serial_numbers";
@@ -516,8 +672,24 @@ create table if not exists public."product_barcodes" (
   "deleted_at" bigint,
   store_id text not null,
   server_updated_at timestamptz not null default clock_timestamp(),
+  constraint "product_barcodes_product_id_fkey" foreign key ("product_id") references public."products" ("id") on delete cascade,
   primary key ("id")
 );
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'product_barcodes_product_id_fkey' and conrelid = 'public."product_barcodes"'::regclass
+  ) then
+    alter table public."product_barcodes" add constraint "product_barcodes_product_id_fkey"
+      foreign key ("product_id") references public."products" ("id") on delete cascade;
+  end if;
+end;
+$$;
+alter table public."product_barcodes" add column if not exists "product_id" text;
+alter table public."product_barcodes" add column if not exists "barcode" text;
+alter table public."product_barcodes" add column if not exists "updated_at" bigint not null default (extract(epoch from clock_timestamp()) * 1000)::bigint;
+alter table public."product_barcodes" add column if not exists "deleted_at" bigint;
 create index if not exists "product_barcodes_sync_idx" on public."product_barcodes" (store_id, server_updated_at, "id");
 drop trigger if exists touch_server_updated_at on public."product_barcodes";
 create trigger touch_server_updated_at before insert or update on public."product_barcodes" for each row execute function public.touch_server_updated_at();
@@ -528,36 +700,6 @@ drop policy if exists "writers insert" on public."product_barcodes";
 create policy "writers insert" on public."product_barcodes" for insert with check (public.can_write(store_id, array['OWNER','MANAGER']));
 drop policy if exists "writers update" on public."product_barcodes";
 create policy "writers update" on public."product_barcodes" for update using (public.can_write(store_id, array['OWNER','MANAGER'])) with check (public.can_write(store_id, array['OWNER','MANAGER']));
-
--- batches: append-only
-create table if not exists public."batches" (
-  "id" text not null,
-  "product_id" text not null,
-  "branch_id" text not null,
-  "batch_no" text,
-  "expiry_date" text,
-  "cost_paise" bigint not null,
-  "mrp_paise" bigint,
-  "qty_received_milli" bigint not null,
-  "qty_on_hand_milli" bigint not null,
-  "received_at" bigint not null,
-  "updated_at" bigint not null,
-  "deleted_at" bigint,
-  store_id text not null,
-  server_updated_at timestamptz not null default clock_timestamp(),
-  primary key ("id")
-);
-alter table public."batches" add column if not exists "branch_id" text not null default 'default';
-update public."batches" set "branch_id" = store_id where "branch_id" = 'default';
-create index if not exists "batches_branch_idx" on public."batches" (store_id, "branch_id");
-create index if not exists "batches_sync_idx" on public."batches" (store_id, server_updated_at, "id");
-drop trigger if exists touch_server_updated_at on public."batches";
-create trigger touch_server_updated_at before insert or update on public."batches" for each row execute function public.touch_server_updated_at();
-alter table public."batches" enable row level security;
-drop policy if exists "members read" on public."batches";
-create policy "members read" on public."batches" for select using (public.is_member(store_id));
-drop policy if exists "writers insert" on public."batches";
-create policy "writers insert" on public."batches" for insert with check (public.can_write(store_id, array['OWNER','MANAGER']));
 
 -- suppliers: mutable
 create table if not exists public."suppliers" (
@@ -574,6 +716,14 @@ create table if not exists public."suppliers" (
   server_updated_at timestamptz not null default clock_timestamp(),
   primary key ("id")
 );
+alter table public."suppliers" add column if not exists "name" text;
+alter table public."suppliers" add column if not exists "phone" text;
+alter table public."suppliers" add column if not exists "gstin" text;
+alter table public."suppliers" add column if not exists "notes" text;
+alter table public."suppliers" add column if not exists "is_active" integer not null default 1;
+alter table public."suppliers" add column if not exists "created_at" bigint not null default (extract(epoch from clock_timestamp()) * 1000)::bigint;
+alter table public."suppliers" add column if not exists "updated_at" bigint not null default (extract(epoch from clock_timestamp()) * 1000)::bigint;
+alter table public."suppliers" add column if not exists "deleted_at" bigint;
 create index if not exists "suppliers_sync_idx" on public."suppliers" (store_id, server_updated_at, "id");
 drop trigger if exists touch_server_updated_at on public."suppliers";
 create trigger touch_server_updated_at before insert or update on public."suppliers" for each row execute function public.touch_server_updated_at();
@@ -599,6 +749,13 @@ create table if not exists public."customers" (
   server_updated_at timestamptz not null default clock_timestamp(),
   primary key ("id")
 );
+alter table public."customers" add column if not exists "name" text;
+alter table public."customers" add column if not exists "phone" text;
+alter table public."customers" add column if not exists "credit_limit_paise" bigint;
+alter table public."customers" add column if not exists "is_active" integer not null default 1;
+alter table public."customers" add column if not exists "created_at" bigint not null default (extract(epoch from clock_timestamp()) * 1000)::bigint;
+alter table public."customers" add column if not exists "updated_at" bigint not null default (extract(epoch from clock_timestamp()) * 1000)::bigint;
+alter table public."customers" add column if not exists "deleted_at" bigint;
 create index if not exists "customers_sync_idx" on public."customers" (store_id, server_updated_at, "id");
 drop trigger if exists touch_server_updated_at on public."customers";
 create trigger touch_server_updated_at before insert or update on public."customers" for each row execute function public.touch_server_updated_at();
@@ -609,6 +766,42 @@ drop policy if exists "writers insert" on public."customers";
 create policy "writers insert" on public."customers" for insert with check (public.can_write(store_id, array['OWNER','MANAGER','CASHIER']));
 drop policy if exists "writers update" on public."customers";
 create policy "writers update" on public."customers" for update using (public.can_write(store_id, array['OWNER','MANAGER','CASHIER'])) with check (public.can_write(store_id, array['OWNER','MANAGER','CASHIER']));
+
+-- held_carts: mutable
+create table if not exists public."held_carts" (
+  "id" text not null,
+  "label" text not null,
+  "customer_id" text,
+  "inter_state" integer not null,
+  "bill_discount_paise" bigint not null,
+  "items_json" text not null,
+  "item_count" integer not null,
+  "created_at" bigint not null,
+  "updated_at" bigint not null,
+  "deleted_at" bigint,
+  store_id text not null,
+  server_updated_at timestamptz not null default clock_timestamp(),
+  primary key ("id")
+);
+alter table public."held_carts" add column if not exists "label" text;
+alter table public."held_carts" add column if not exists "customer_id" text;
+alter table public."held_carts" add column if not exists "inter_state" integer not null default 0;
+alter table public."held_carts" add column if not exists "bill_discount_paise" bigint not null default 0;
+alter table public."held_carts" add column if not exists "items_json" text;
+alter table public."held_carts" add column if not exists "item_count" integer;
+alter table public."held_carts" add column if not exists "created_at" bigint not null default (extract(epoch from clock_timestamp()) * 1000)::bigint;
+alter table public."held_carts" add column if not exists "updated_at" bigint not null default (extract(epoch from clock_timestamp()) * 1000)::bigint;
+alter table public."held_carts" add column if not exists "deleted_at" bigint;
+create index if not exists "held_carts_sync_idx" on public."held_carts" (store_id, server_updated_at, "id");
+drop trigger if exists touch_server_updated_at on public."held_carts";
+create trigger touch_server_updated_at before insert or update on public."held_carts" for each row execute function public.touch_server_updated_at();
+alter table public."held_carts" enable row level security;
+drop policy if exists "members read" on public."held_carts";
+create policy "members read" on public."held_carts" for select using (public.is_member(store_id));
+drop policy if exists "writers insert" on public."held_carts";
+create policy "writers insert" on public."held_carts" for insert with check (public.can_write(store_id, array['OWNER','MANAGER','CASHIER']));
+drop policy if exists "writers update" on public."held_carts";
+create policy "writers update" on public."held_carts" for update using (public.can_write(store_id, array['OWNER','MANAGER','CASHIER'])) with check (public.can_write(store_id, array['OWNER','MANAGER','CASHIER']));
 
 -- staff: mutable
 create table if not exists public."staff" (
@@ -623,6 +816,12 @@ create table if not exists public."staff" (
   server_updated_at timestamptz not null default clock_timestamp(),
   primary key ("id")
 );
+alter table public."staff" add column if not exists "name" text;
+alter table public."staff" add column if not exists "role" text;
+alter table public."staff" add column if not exists "is_active" integer not null default 1;
+alter table public."staff" add column if not exists "created_at" bigint not null default (extract(epoch from clock_timestamp()) * 1000)::bigint;
+alter table public."staff" add column if not exists "updated_at" bigint not null default (extract(epoch from clock_timestamp()) * 1000)::bigint;
+alter table public."staff" add column if not exists "deleted_at" bigint;
 create index if not exists "staff_sync_idx" on public."staff" (store_id, server_updated_at, "id");
 drop trigger if exists touch_server_updated_at on public."staff";
 create trigger touch_server_updated_at before insert or update on public."staff" for each row execute function public.touch_server_updated_at();
@@ -642,7 +841,6 @@ create table if not exists public."sales" (
   "customer_id" text,
   "status" text not null,
   "inter_state" integer not null,
-  "subtotal_paise" bigint not null,
   "discount_paise" bigint not null,
   "tax_paise" bigint not null,
   "round_off_paise" bigint not null,
@@ -657,6 +855,21 @@ create table if not exists public."sales" (
   server_updated_at timestamptz not null default clock_timestamp(),
   primary key ("id")
 );
+alter table public."sales" add column if not exists "invoice_no" text;
+alter table public."sales" add column if not exists "branch_id" text not null default 'default';
+alter table public."sales" add column if not exists "customer_id" text;
+alter table public."sales" add column if not exists "status" text not null default 'COMPLETED';
+alter table public."sales" add column if not exists "inter_state" integer not null default 0;
+alter table public."sales" add column if not exists "discount_paise" bigint;
+alter table public."sales" add column if not exists "tax_paise" bigint;
+alter table public."sales" add column if not exists "round_off_paise" bigint;
+alter table public."sales" add column if not exists "total_paise" bigint;
+alter table public."sales" add column if not exists "paid_paise" bigint;
+alter table public."sales" add column if not exists "returned_paise" bigint not null default 0;
+alter table public."sales" add column if not exists "cancel_reason" text;
+alter table public."sales" add column if not exists "cancelled_at" bigint;
+alter table public."sales" add column if not exists "notes" text;
+alter table public."sales" add column if not exists "created_at" bigint not null default (extract(epoch from clock_timestamp()) * 1000)::bigint;
 alter table public."sales" add column if not exists "branch_id" text not null default 'default';
 update public."sales" set "branch_id" = store_id where "branch_id" = 'default';
 create index if not exists "sales_branch_idx" on public."sales" (store_id, "branch_id");
@@ -694,8 +907,38 @@ create table if not exists public."sale_lines" (
   "returned_amount_paise" bigint not null,
   store_id text not null,
   server_updated_at timestamptz not null default clock_timestamp(),
+  constraint "sale_lines_sale_id_fkey" foreign key ("sale_id") references public."sales" ("id") on delete cascade,
   primary key ("id")
 );
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'sale_lines_sale_id_fkey' and conrelid = 'public."sale_lines"'::regclass
+  ) then
+    alter table public."sale_lines" add constraint "sale_lines_sale_id_fkey"
+      foreign key ("sale_id") references public."sales" ("id") on delete cascade;
+  end if;
+end;
+$$;
+alter table public."sale_lines" add column if not exists "sale_id" text;
+alter table public."sale_lines" add column if not exists "product_id" text;
+alter table public."sale_lines" add column if not exists "batch_id" text;
+alter table public."sale_lines" add column if not exists "name_snapshot" text;
+alter table public."sale_lines" add column if not exists "hsn_snapshot" text;
+alter table public."sale_lines" add column if not exists "qty_milli" bigint;
+alter table public."sale_lines" add column if not exists "unit_price_paise" bigint;
+alter table public."sale_lines" add column if not exists "discount_paise" bigint;
+alter table public."sale_lines" add column if not exists "gst_rate_bp" integer;
+alter table public."sale_lines" add column if not exists "tax_inclusive" integer;
+alter table public."sale_lines" add column if not exists "taxable_value_paise" bigint;
+alter table public."sale_lines" add column if not exists "cgst_paise" bigint;
+alter table public."sale_lines" add column if not exists "sgst_paise" bigint;
+alter table public."sale_lines" add column if not exists "igst_paise" bigint;
+alter table public."sale_lines" add column if not exists "line_total_paise" bigint;
+alter table public."sale_lines" add column if not exists "cost_snapshot_paise" bigint;
+alter table public."sale_lines" add column if not exists "returned_qty_milli" bigint not null default 0;
+alter table public."sale_lines" add column if not exists "returned_amount_paise" bigint not null default 0;
 create index if not exists "sale_lines_sync_idx" on public."sale_lines" (store_id, server_updated_at, "id");
 drop trigger if exists touch_server_updated_at on public."sale_lines";
 create trigger touch_server_updated_at before insert or update on public."sale_lines" for each row execute function public.touch_server_updated_at();
@@ -718,6 +961,12 @@ create table if not exists public."payments" (
   server_updated_at timestamptz not null default clock_timestamp(),
   primary key ("id")
 );
+alter table public."payments" add column if not exists "sale_id" text;
+alter table public."payments" add column if not exists "customer_id" text;
+alter table public."payments" add column if not exists "method" text;
+alter table public."payments" add column if not exists "amount_paise" bigint;
+alter table public."payments" add column if not exists "reference" text;
+alter table public."payments" add column if not exists "created_at" bigint not null default (extract(epoch from clock_timestamp()) * 1000)::bigint;
 create index if not exists "payments_sync_idx" on public."payments" (store_id, server_updated_at, "id");
 drop trigger if exists touch_server_updated_at on public."payments";
 create trigger touch_server_updated_at before insert or update on public."payments" for each row execute function public.touch_server_updated_at();
@@ -742,6 +991,14 @@ create table if not exists public."sale_returns" (
   server_updated_at timestamptz not null default clock_timestamp(),
   primary key ("id")
 );
+alter table public."sale_returns" add column if not exists "sale_id" text;
+alter table public."sale_returns" add column if not exists "customer_id" text;
+alter table public."sale_returns" add column if not exists "total_paise" bigint;
+alter table public."sale_returns" add column if not exists "due_reduced_paise" bigint;
+alter table public."sale_returns" add column if not exists "refund_paise" bigint;
+alter table public."sale_returns" add column if not exists "refund_method" text;
+alter table public."sale_returns" add column if not exists "kept_as_credit" integer not null default 0;
+alter table public."sale_returns" add column if not exists "created_at" bigint not null default (extract(epoch from clock_timestamp()) * 1000)::bigint;
 create index if not exists "sale_returns_sync_idx" on public."sale_returns" (store_id, server_updated_at, "id");
 drop trigger if exists touch_server_updated_at on public."sale_returns";
 create trigger touch_server_updated_at before insert or update on public."sale_returns" for each row execute function public.touch_server_updated_at();
@@ -763,8 +1020,27 @@ create table if not exists public."sale_return_lines" (
   "cost_snapshot_paise" bigint not null,
   store_id text not null,
   server_updated_at timestamptz not null default clock_timestamp(),
+  constraint "sale_return_lines_return_id_fkey" foreign key ("return_id") references public."sale_returns" ("id") on delete cascade,
   primary key ("id")
 );
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'sale_return_lines_return_id_fkey' and conrelid = 'public."sale_return_lines"'::regclass
+  ) then
+    alter table public."sale_return_lines" add constraint "sale_return_lines_return_id_fkey"
+      foreign key ("return_id") references public."sale_returns" ("id") on delete cascade;
+  end if;
+end;
+$$;
+alter table public."sale_return_lines" add column if not exists "return_id" text;
+alter table public."sale_return_lines" add column if not exists "sale_line_id" text;
+alter table public."sale_return_lines" add column if not exists "product_id" text;
+alter table public."sale_return_lines" add column if not exists "batch_id" text;
+alter table public."sale_return_lines" add column if not exists "qty_milli" bigint;
+alter table public."sale_return_lines" add column if not exists "amount_paise" bigint;
+alter table public."sale_return_lines" add column if not exists "cost_snapshot_paise" bigint;
 create index if not exists "sale_return_lines_sync_idx" on public."sale_return_lines" (store_id, server_updated_at, "id");
 drop trigger if exists touch_server_updated_at on public."sale_return_lines";
 create trigger touch_server_updated_at before insert or update on public."sale_return_lines" for each row execute function public.touch_server_updated_at();
@@ -791,6 +1067,16 @@ create table if not exists public."stock_movements" (
   server_updated_at timestamptz not null default clock_timestamp(),
   primary key ("id")
 );
+alter table public."stock_movements" add column if not exists "product_id" text;
+alter table public."stock_movements" add column if not exists "branch_id" text not null default 'default';
+alter table public."stock_movements" add column if not exists "batch_id" text;
+alter table public."stock_movements" add column if not exists "type" text;
+alter table public."stock_movements" add column if not exists "qty_milli" bigint;
+alter table public."stock_movements" add column if not exists "unit_cost_paise" bigint;
+alter table public."stock_movements" add column if not exists "ref_type" text;
+alter table public."stock_movements" add column if not exists "ref_id" text;
+alter table public."stock_movements" add column if not exists "reason" text;
+alter table public."stock_movements" add column if not exists "created_at" bigint not null default (extract(epoch from clock_timestamp()) * 1000)::bigint;
 alter table public."stock_movements" add column if not exists "branch_id" text not null default 'default';
 update public."stock_movements" set "branch_id" = store_id where "branch_id" = 'default';
 create index if not exists "stock_movements_branch_idx" on public."stock_movements" (store_id, "branch_id");
@@ -816,6 +1102,12 @@ create table if not exists public."customer_ledger" (
   server_updated_at timestamptz not null default clock_timestamp(),
   primary key ("id")
 );
+alter table public."customer_ledger" add column if not exists "customer_id" text;
+alter table public."customer_ledger" add column if not exists "type" text;
+alter table public."customer_ledger" add column if not exists "amount_paise" bigint;
+alter table public."customer_ledger" add column if not exists "ref_type" text;
+alter table public."customer_ledger" add column if not exists "ref_id" text;
+alter table public."customer_ledger" add column if not exists "created_at" bigint not null default (extract(epoch from clock_timestamp()) * 1000)::bigint;
 create index if not exists "customer_ledger_sync_idx" on public."customer_ledger" (store_id, server_updated_at, "id");
 drop trigger if exists touch_server_updated_at on public."customer_ledger";
 create trigger touch_server_updated_at before insert or update on public."customer_ledger" for each row execute function public.touch_server_updated_at();
@@ -825,7 +1117,7 @@ create policy "members read" on public."customer_ledger" for select using (publi
 drop policy if exists "writers insert" on public."customer_ledger";
 create policy "writers insert" on public."customer_ledger" for insert with check (public.can_write(store_id, array['OWNER','MANAGER','CASHIER']));
 
--- purchases: append-only
+-- purchases: mutable
 create table if not exists public."purchases" (
   "id" text not null,
   "branch_id" text not null,
@@ -842,6 +1134,15 @@ create table if not exists public."purchases" (
   primary key ("id")
 );
 alter table public."purchases" add column if not exists "branch_id" text not null default 'default';
+alter table public."purchases" add column if not exists "supplier_id" text;
+alter table public."purchases" add column if not exists "invoice_no" text;
+alter table public."purchases" add column if not exists "purchase_date" bigint;
+alter table public."purchases" add column if not exists "total_paise" bigint;
+alter table public."purchases" add column if not exists "paid_paise" bigint;
+alter table public."purchases" add column if not exists "pay_method" text;
+alter table public."purchases" add column if not exists "notes" text;
+alter table public."purchases" add column if not exists "created_at" bigint not null default (extract(epoch from clock_timestamp()) * 1000)::bigint;
+alter table public."purchases" add column if not exists "branch_id" text not null default 'default';
 update public."purchases" set "branch_id" = store_id where "branch_id" = 'default';
 create index if not exists "purchases_branch_idx" on public."purchases" (store_id, "branch_id");
 create index if not exists "purchases_sync_idx" on public."purchases" (store_id, server_updated_at, "id");
@@ -852,6 +1153,8 @@ drop policy if exists "members read" on public."purchases";
 create policy "members read" on public."purchases" for select using (public.is_member(store_id));
 drop policy if exists "writers insert" on public."purchases";
 create policy "writers insert" on public."purchases" for insert with check (public.can_write(store_id, array['OWNER','MANAGER']));
+drop policy if exists "writers update" on public."purchases";
+create policy "writers update" on public."purchases" for update using (public.can_write(store_id, array['OWNER','MANAGER'])) with check (public.can_write(store_id, array['OWNER','MANAGER']));
 
 -- purchase_lines: append-only
 create table if not exists public."purchase_lines" (
@@ -865,8 +1168,27 @@ create table if not exists public."purchase_lines" (
   "line_total_paise" bigint not null,
   store_id text not null,
   server_updated_at timestamptz not null default clock_timestamp(),
+  constraint "purchase_lines_purchase_id_fkey" foreign key ("purchase_id") references public."purchases" ("id") on delete cascade,
   primary key ("id")
 );
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = 'purchase_lines_purchase_id_fkey' and conrelid = 'public."purchase_lines"'::regclass
+  ) then
+    alter table public."purchase_lines" add constraint "purchase_lines_purchase_id_fkey"
+      foreign key ("purchase_id") references public."purchases" ("id") on delete cascade;
+  end if;
+end;
+$$;
+alter table public."purchase_lines" add column if not exists "purchase_id" text;
+alter table public."purchase_lines" add column if not exists "product_id" text;
+alter table public."purchase_lines" add column if not exists "batch_id" text;
+alter table public."purchase_lines" add column if not exists "name_snapshot" text;
+alter table public."purchase_lines" add column if not exists "qty_milli" bigint;
+alter table public."purchase_lines" add column if not exists "unit_cost_paise" bigint;
+alter table public."purchase_lines" add column if not exists "line_total_paise" bigint;
 create index if not exists "purchase_lines_sync_idx" on public."purchase_lines" (store_id, server_updated_at, "id");
 drop trigger if exists touch_server_updated_at on public."purchase_lines";
 create trigger touch_server_updated_at before insert or update on public."purchase_lines" for each row execute function public.touch_server_updated_at();
@@ -890,6 +1212,13 @@ create table if not exists public."supplier_ledger" (
   server_updated_at timestamptz not null default clock_timestamp(),
   primary key ("id")
 );
+alter table public."supplier_ledger" add column if not exists "supplier_id" text;
+alter table public."supplier_ledger" add column if not exists "type" text;
+alter table public."supplier_ledger" add column if not exists "amount_paise" bigint;
+alter table public."supplier_ledger" add column if not exists "method" text;
+alter table public."supplier_ledger" add column if not exists "ref_type" text;
+alter table public."supplier_ledger" add column if not exists "ref_id" text;
+alter table public."supplier_ledger" add column if not exists "created_at" bigint not null default (extract(epoch from clock_timestamp()) * 1000)::bigint;
 create index if not exists "supplier_ledger_sync_idx" on public."supplier_ledger" (store_id, server_updated_at, "id");
 drop trigger if exists touch_server_updated_at on public."supplier_ledger";
 create trigger touch_server_updated_at before insert or update on public."supplier_ledger" for each row execute function public.touch_server_updated_at();
@@ -914,6 +1243,14 @@ create table if not exists public."audit_log" (
   server_updated_at timestamptz not null default clock_timestamp(),
   primary key ("id")
 );
+alter table public."audit_log" add column if not exists "created_at" bigint not null default (extract(epoch from clock_timestamp()) * 1000)::bigint;
+alter table public."audit_log" add column if not exists "actor_id" text;
+alter table public."audit_log" add column if not exists "actor_name" text;
+alter table public."audit_log" add column if not exists "actor_role" text;
+alter table public."audit_log" add column if not exists "action" text;
+alter table public."audit_log" add column if not exists "entity_type" text;
+alter table public."audit_log" add column if not exists "entity_id" text;
+alter table public."audit_log" add column if not exists "summary" text;
 create index if not exists "audit_log_sync_idx" on public."audit_log" (store_id, server_updated_at, "id");
 drop trigger if exists touch_server_updated_at on public."audit_log";
 create trigger touch_server_updated_at before insert or update on public."audit_log" for each row execute function public.touch_server_updated_at();
@@ -928,5 +1265,2975 @@ insert into public."branches" ("id", "name", "address", "city", "phone", "is_act
 select s."id", s."name", s."address", s."city", s."phone", 1, s."created_at", s."updated_at", null, s."id"
 from public."store" s
 on conflict ("id") do nothing;
+
+-- Included migration: 20261105000100_product_catalog_rpc.sql
+create or replace function public.save_product_catalog(
+  p_store_id text,
+  p_product jsonb,
+  p_barcode text,
+  p_barcode_id text,
+  p_now bigint
+) returns jsonb
+language plpgsql
+security invoker
+set search_path = public, pg_temp
+as $$
+declare
+  v_product public.products%rowtype;
+  v_duplicate_name text;
+  v_existing_barcode text;
+  v_rows integer;
+begin
+  if not public.can_write(p_store_id, array['OWNER', 'MANAGER']) then
+    raise exception 'not authorized to edit products';
+  end if;
+
+  v_product := jsonb_populate_record(null::public.products, p_product);
+  if v_product.id is null or v_product.store_id is distinct from p_store_id then
+    raise exception 'product store does not match the selected store';
+  end if;
+  if not exists (
+    select 1 from public.units unit
+    where unit.id = v_product.unit_id and unit.store_id = p_store_id
+  ) then
+    raise exception 'unit was not found in the selected store';
+  end if;
+  if v_product.category_id is not null and not exists (
+    select 1 from public.categories category
+    where category.id = v_product.category_id
+      and category.store_id = p_store_id
+      and category.deleted_at is null
+  ) then
+    raise exception 'category was not found in the selected store';
+  end if;
+
+  if v_product.parent_product_id is not null then
+    if not exists (
+      select 1
+      from public.products parent
+      where parent.id = v_product.parent_product_id
+        and parent.store_id = p_store_id
+        and parent.deleted_at is null
+        and parent.parent_product_id is null
+        and parent.is_active = 1
+    ) or exists (
+      select 1
+      from public.stock_movements movement
+      where movement.store_id = p_store_id
+        and movement.product_id = v_product.parent_product_id
+    ) then
+      return jsonb_build_object('status', 'invalid_variant_parent');
+    end if;
+  end if;
+
+  p_barcode := nullif(btrim(p_barcode), '');
+  if p_barcode is not null then
+    perform pg_advisory_xact_lock(hashtext(p_store_id), hashtext(p_barcode));
+    select product.name
+      into v_duplicate_name
+    from public.product_barcodes barcode
+    left join public.products product
+      on product.id = barcode.product_id and product.store_id = barcode.store_id
+    where barcode.store_id = p_store_id
+      and barcode.barcode = p_barcode
+      and barcode.deleted_at is null
+      and barcode.product_id <> v_product.id
+    order by barcode.updated_at desc, barcode.id
+    limit 1
+    for update of barcode;
+
+    if found then
+      return jsonb_build_object(
+        'status', 'duplicate_barcode',
+        'product_name', coalesce(v_duplicate_name, 'another product')
+      );
+    end if;
+  end if;
+
+  insert into public.products (
+    id, name, parent_product_id, variant_label, sku, category_id, unit_id, hsn_code,
+    gst_rate_bp, tax_inclusive, mrp_paise, sell_price_paise, cost_paise, track_expiry,
+    serial_tracked, min_stock_milli, is_active, attributes_json, created_at, updated_at,
+    deleted_at, store_id
+  ) values (
+    v_product.id, v_product.name, v_product.parent_product_id, v_product.variant_label,
+    v_product.sku, v_product.category_id, v_product.unit_id, v_product.hsn_code,
+    v_product.gst_rate_bp, v_product.tax_inclusive, v_product.mrp_paise,
+    v_product.sell_price_paise, v_product.cost_paise, v_product.track_expiry,
+    v_product.serial_tracked, v_product.min_stock_milli, v_product.is_active,
+    v_product.attributes_json, v_product.created_at, p_now, v_product.deleted_at, p_store_id
+  )
+  on conflict (id) do update set
+    name = excluded.name,
+    parent_product_id = excluded.parent_product_id,
+    variant_label = excluded.variant_label,
+    sku = excluded.sku,
+    category_id = excluded.category_id,
+    unit_id = excluded.unit_id,
+    hsn_code = excluded.hsn_code,
+    gst_rate_bp = excluded.gst_rate_bp,
+    tax_inclusive = excluded.tax_inclusive,
+    mrp_paise = excluded.mrp_paise,
+    sell_price_paise = excluded.sell_price_paise,
+    cost_paise = excluded.cost_paise,
+    track_expiry = excluded.track_expiry,
+    serial_tracked = excluded.serial_tracked,
+    min_stock_milli = excluded.min_stock_milli,
+    is_active = excluded.is_active,
+    attributes_json = excluded.attributes_json,
+    updated_at = excluded.updated_at,
+    deleted_at = excluded.deleted_at
+  where public.products.store_id = p_store_id;
+
+  get diagnostics v_rows = row_count;
+  if v_rows = 0 then
+    raise exception 'product was not found in the selected store';
+  end if;
+
+  select barcode.barcode
+    into v_existing_barcode
+  from public.product_barcodes barcode
+  where barcode.store_id = p_store_id
+    and barcode.product_id = v_product.id
+    and barcode.deleted_at is null
+  order by barcode.updated_at desc, barcode.id
+  limit 1;
+
+  if v_existing_barcode is distinct from p_barcode then
+    update public.product_barcodes
+       set deleted_at = p_now, updated_at = p_now
+     where store_id = p_store_id
+       and product_id = v_product.id
+       and deleted_at is null;
+    if p_barcode is not null then
+      if p_barcode_id is null then
+        raise exception 'barcode ID is required';
+      end if;
+      insert into public.product_barcodes (id, product_id, barcode, updated_at, deleted_at, store_id)
+      values (p_barcode_id, v_product.id, p_barcode, p_now, null, p_store_id);
+    end if;
+  end if;
+
+  if v_product.parent_product_id is not null then
+    update public.product_barcodes
+       set deleted_at = p_now, updated_at = p_now
+     where store_id = p_store_id
+       and product_id = v_product.parent_product_id
+       and deleted_at is null;
+  end if;
+
+  return jsonb_build_object('status', 'saved', 'id', v_product.id);
+end;
+$$;
+
+create or replace function public.archive_product_catalog(
+  p_store_id text,
+  p_product_id text,
+  p_now bigint
+) returns void
+language plpgsql
+security invoker
+set search_path = public, pg_temp
+as $$
+declare
+  v_parent_product_id text;
+begin
+  if not public.can_write(p_store_id, array['OWNER', 'MANAGER']) then
+    raise exception 'not authorized to edit products';
+  end if;
+
+  select product.parent_product_id
+    into v_parent_product_id
+  from public.products product
+  where product.store_id = p_store_id
+    and product.id = p_product_id
+    and product.deleted_at is null
+  for update;
+  if not found then
+    raise exception 'product was not found in the selected store';
+  end if;
+
+  if v_parent_product_id is null then
+    update public.products
+       set deleted_at = p_now, updated_at = p_now
+     where store_id = p_store_id
+       and parent_product_id = p_product_id
+       and deleted_at is null;
+    update public.product_barcodes
+       set deleted_at = p_now, updated_at = p_now
+     where store_id = p_store_id
+       and deleted_at is null
+       and (product_id = p_product_id or product_id in (
+         select id from public.products where store_id = p_store_id and parent_product_id = p_product_id
+       ));
+  else
+    update public.product_barcodes
+       set deleted_at = p_now, updated_at = p_now
+     where store_id = p_store_id and product_id = p_product_id and deleted_at is null;
+  end if;
+
+  update public.products
+     set deleted_at = p_now, updated_at = p_now
+   where store_id = p_store_id and id = p_product_id;
+end;
+$$;
+
+create or replace function public.delete_category_catalog(
+  p_store_id text,
+  p_category_id text,
+  p_now bigint
+) returns void
+language plpgsql
+security invoker
+set search_path = public, pg_temp
+as $$
+begin
+  if not public.can_write(p_store_id, array['OWNER', 'MANAGER']) then
+    raise exception 'not authorized to edit categories';
+  end if;
+
+  update public.products
+     set category_id = null, updated_at = p_now
+   where store_id = p_store_id and category_id = p_category_id and deleted_at is null;
+
+  update public.categories
+     set deleted_at = p_now, updated_at = p_now
+   where store_id = p_store_id and id = p_category_id and deleted_at is null;
+  if not found then
+    raise exception 'category was not found in the selected store';
+  end if;
+end;
+$$;
+
+revoke all on function public.save_product_catalog(text, jsonb, text, text, bigint) from public;
+grant execute on function public.save_product_catalog(text, jsonb, text, text, bigint) to authenticated;
+revoke all on function public.archive_product_catalog(text, text, bigint) from public;
+grant execute on function public.archive_product_catalog(text, text, bigint) to authenticated;
+revoke all on function public.delete_category_catalog(text, text, bigint) from public;
+grant execute on function public.delete_category_catalog(text, text, bigint) to authenticated;
+
+-- Included migration: 20261105000200_cloud_sales_inventory.sql
+-- Cloud-authoritative sales and manual inventory transactions.
+-- Apply after supabase/schema.sql in the Supabase SQL editor.
+
+alter table public."store"
+  add column if not exists "next_invoice_no" bigint not null default 1;
+alter table public."sales"
+  add column if not exists "subtotal_paise" bigint not null default 0;
+
+create table if not exists public.storevia_transaction_receipts (
+  store_id text not null,
+  request_id text not null,
+  operation text not null,
+  result_id text not null,
+  created_at timestamptz not null default now(),
+  primary key (store_id, request_id)
+);
+alter table public.storevia_transaction_receipts enable row level security;
+revoke all on public.storevia_transaction_receipts from public, anon, authenticated;
+
+create or replace function public.storevia_round_half_up(p_value numeric)
+returns bigint
+language sql immutable strict as $$
+  select floor(p_value + 0.5)::bigint;
+$$;
+
+create or replace function public.storevia_checkout(
+  p_store_id text,
+  p_request_id text,
+  p_payload jsonb
+) returns text
+language plpgsql security definer set search_path = public as $$
+declare
+  receipt public.storevia_transaction_receipts%rowtype;
+  shop public."store"%rowtype;
+  branch text;
+  sale_id text := gen_random_uuid()::text;
+  invoice_no text;
+  customer_id text := nullif(p_payload->>'customer_id', '');
+  created_at_ms bigint := coalesce((p_payload->>'created_at')::bigint, (extract(epoch from clock_timestamp()) * 1000)::bigint);
+  items jsonb := coalesce(p_payload->'items', '[]'::jsonb);
+  payments jsonb := coalesce(p_payload->'payments', '[]'::jsonb);
+  item jsonb;
+  pay jsonb;
+  product_row public."products"%rowtype;
+  batch_row public."batches"%rowtype;
+  line_id text;
+  qty bigint;
+  remaining bigint;
+  batch_take bigint;
+  gross bigint;
+  line_discount bigint;
+  bill_discount bigint := coalesce((p_payload->>'bill_discount_paise')::bigint, 0);
+  net_total bigint := 0;
+  net_line bigint;
+  share bigint;
+  share_left bigint := 0;
+  gross_left bigint;
+  discount_left bigint;
+  alloc_gross bigint;
+  alloc_discount bigint;
+  taxable bigint;
+  tax bigint;
+  cgst bigint;
+  sgst bigint;
+  igst bigint;
+  line_total bigint;
+  line_sum bigint := 0;
+  subtotal bigint := 0;
+  discount_total bigint := 0;
+  tax_total bigint := 0;
+  total bigint;
+  round_off bigint;
+  paid bigint := 0;
+  credit bigint;
+  rate numeric;
+  inter_state boolean := coalesce((p_payload->>'inter_state')::boolean, false);
+  allow_negative boolean;
+  preferred text;
+  allocated_batch text;
+  cost bigint;
+  item_index integer := 0;
+  item_count integer := jsonb_array_length(items);
+  movement_id text;
+  serial_row record;
+  needed_serials bigint;
+  serial_count bigint;
+  actor_role text;
+begin
+  if auth.uid() is null or not public.can_write(p_store_id, array['OWNER','MANAGER','CASHIER']) then
+    raise exception 'cloud sale write access required';
+  end if;
+  if p_request_id is null or btrim(p_request_id) = '' then raise exception 'request id is required'; end if;
+  select role into actor_role from public.store_members where store_id = p_store_id and user_id = auth.uid();
+
+  select * into receipt from public.storevia_transaction_receipts
+    where store_id = p_store_id and request_id = p_request_id;
+  if found then
+    if receipt.operation <> 'CHECKOUT' then raise exception 'request id was already used for another operation'; end if;
+    return receipt.result_id;
+  end if;
+  if jsonb_typeof(items) <> 'array' or jsonb_array_length(items) = 0 then raise exception 'cart is empty'; end if;
+  if jsonb_typeof(payments) <> 'array' then raise exception 'payments must be an array'; end if;
+
+  select * into shop from public."store" where store_id = p_store_id for update;
+  if not found then raise exception 'cloud store settings are missing'; end if;
+  select id into branch from public."branches"
+    where store_id = p_store_id and deleted_at is null and is_active = 1
+    order by created_at, name limit 1;
+  branch := coalesce(branch, p_store_id);
+  allow_negative := shop.allow_negative_stock <> 0;
+
+  for item in select value from jsonb_array_elements(items) loop
+    qty := (item->>'qty_milli')::bigint;
+    if qty <= 0 then raise exception 'quantity must be positive'; end if;
+    select * into product_row from public."products"
+      where store_id = p_store_id and id = item->>'product_id'
+        and deleted_at is null and is_active = 1;
+    if not found then raise exception 'product is unavailable'; end if;
+    if (item->>'unit_price_paise')::bigint < 0 then raise exception 'unit price must not be negative'; end if;
+    if (item->>'unit_price_paise')::bigint is distinct from product_row.sell_price_paise and actor_role not in ('OWNER','MANAGER') then
+      raise exception 'price override requires manager approval';
+    end if;
+    if coalesce((item->>'discount_paise')::bigint, 0) > 0 and actor_role not in ('OWNER','MANAGER') then
+      raise exception 'discount requires manager approval';
+    end if;
+    if nullif(item->>'preferred_batch_id', '') is not null and actor_role not in ('OWNER','MANAGER') then
+      raise exception 'batch override requires manager approval';
+    end if;
+    if exists (select 1 from public."recipe_components" rc where rc.store_id = p_store_id
+        and rc.recipe_product_id = product_row.id and rc.deleted_at is null) then
+      raise exception 'cloud checkout for recipe products is not supported by this transaction version';
+    end if;
+    if product_row.serial_tracked <> 0 and qty % 1000 <> 0 then raise exception 'serial-tracked products require whole units'; end if;
+    gross := public.storevia_round_half_up((item->>'unit_price_paise')::numeric * qty / 1000);
+    line_discount := coalesce((item->>'discount_paise')::bigint, 0);
+    if line_discount < 0 or line_discount > gross then raise exception 'invalid line discount'; end if;
+    net_total := net_total + gross - line_discount;
+  end loop;
+  if bill_discount < 0 or bill_discount > net_total then raise exception 'invalid bill discount'; end if;
+  if bill_discount > 0 and actor_role not in ('OWNER','MANAGER') then raise exception 'discount requires manager approval'; end if;
+
+  for pay in select value from jsonb_array_elements(payments) loop
+    if (pay->>'amount_paise')::bigint <= 0 or
+       coalesce(pay->>'method', '') not in ('CASH','UPI','CARD','OTHER') then
+      raise exception 'invalid payment';
+    end if;
+    paid := paid + (pay->>'amount_paise')::bigint;
+  end loop;
+
+  invoice_no := shop.invoice_prefix || '-' || lpad(shop.next_invoice_no::text, 5, '0');
+  update public."store" set next_invoice_no = next_invoice_no + 1 where store_id = p_store_id;
+  insert into public."sales" (
+    id, invoice_no, branch_id, customer_id, status, inter_state, subtotal_paise, discount_paise,
+    tax_paise, round_off_paise, total_paise, paid_paise, returned_paise, created_at, store_id
+  ) values (sale_id, invoice_no, branch, customer_id, 'COMPLETED', inter_state::int, 0,
+    0, 0, 0, 0, 0, 0, created_at_ms, p_store_id);
+
+  -- Allocate discounts and FEFO stock under row locks; every write below shares this RPC transaction.
+  for item in select value from jsonb_array_elements(items) loop
+    item_index := item_index + 1;
+    qty := (item->>'qty_milli')::bigint;
+    select * into product_row from public."products"
+      where store_id = p_store_id and id = item->>'product_id' and deleted_at is null and is_active = 1;
+    gross := public.storevia_round_half_up((item->>'unit_price_paise')::numeric * qty / 1000);
+    line_discount := coalesce((item->>'discount_paise')::bigint, 0);
+    net_line := gross - line_discount;
+    if item_index = item_count then
+      share := bill_discount - share_left;
+    else
+      share := public.storevia_round_half_up(bill_discount::numeric * net_line / nullif(net_total, 0));
+      share_left := coalesce(share_left, 0) + share;
+    end if;
+    line_discount := line_discount + share;
+    preferred := nullif(item->>'preferred_batch_id', '');
+    if preferred is not null then
+      select * into batch_row from public."batches"
+        where store_id = p_store_id and id = preferred and product_id = product_row.id
+          and branch_id = branch and deleted_at is null and qty_on_hand_milli > 0
+          and (expiry_date is null or expiry_date >= current_date::text)
+        for update;
+      if not found then raise exception 'selected batch is unavailable or expired'; end if;
+    end if;
+    remaining := qty;
+    gross_left := gross;
+    discount_left := line_discount;
+    for batch_row in
+      select * from public."batches"
+      where store_id = p_store_id and product_id = product_row.id and branch_id = branch
+        and deleted_at is null and qty_on_hand_milli > 0
+        and (expiry_date is null or expiry_date >= current_date::text)
+      order by case when id = preferred then 0 else 1 end,
+        expiry_date nulls last, received_at, id
+      for update
+    loop
+      exit when remaining = 0;
+      batch_take := least(remaining, batch_row.qty_on_hand_milli);
+      if preferred is not null and batch_row.id = preferred and batch_take < remaining then
+        -- Selected batch is preferred, not exclusive; continue to FEFO after it.
+        null;
+      end if;
+      alloc_gross := case when batch_take = remaining then gross_left
+        else public.storevia_round_half_up(gross::numeric * batch_take / qty) end;
+      alloc_discount := case when batch_take = remaining then discount_left
+        else public.storevia_round_half_up(line_discount::numeric * batch_take / qty) end;
+      rate := product_row.gst_rate_bp::numeric;
+      if product_row.tax_inclusive <> 0 then
+        taxable := public.storevia_round_half_up((alloc_gross - alloc_discount)::numeric * 10000 / (10000 + rate));
+        tax := alloc_gross - alloc_discount - taxable;
+      else
+        taxable := alloc_gross - alloc_discount;
+        tax := public.storevia_round_half_up(taxable::numeric * rate / 10000);
+      end if;
+      if inter_state then
+        cgst := 0; sgst := 0; igst := tax;
+      else
+        cgst := public.storevia_round_half_up(tax::numeric / 2);
+        sgst := tax - cgst; igst := 0;
+      end if;
+      line_total := taxable + tax;
+      line_id := gen_random_uuid()::text;
+      insert into public."sale_lines" (
+        id, sale_id, product_id, batch_id, name_snapshot, hsn_snapshot, qty_milli,
+        unit_price_paise, discount_paise, gst_rate_bp, tax_inclusive, taxable_value_paise,
+        cgst_paise, sgst_paise, igst_paise, line_total_paise, cost_snapshot_paise,
+        returned_qty_milli, returned_amount_paise, store_id
+      ) values (
+        line_id, sale_id, product_row.id, batch_row.id, product_row.name, product_row.hsn_code, batch_take,
+        (item->>'unit_price_paise')::bigint, alloc_discount, product_row.gst_rate_bp,
+        product_row.tax_inclusive, taxable, cgst, sgst, igst, line_total, batch_row.cost_paise,
+        0, 0, p_store_id
+      );
+      update public."batches" set qty_on_hand_milli = qty_on_hand_milli - batch_take,
+        updated_at = created_at_ms where store_id = p_store_id and id = batch_row.id;
+      movement_id := gen_random_uuid()::text;
+      insert into public."stock_movements" (
+        id, product_id, branch_id, batch_id, type, qty_milli, unit_cost_paise, ref_type, ref_id, created_at, store_id
+      ) values (movement_id, product_row.id, branch, batch_row.id, 'SALE', -batch_take,
+        batch_row.cost_paise, 'SALE', sale_id, created_at_ms, p_store_id);
+      if product_row.serial_tracked <> 0 then
+        needed_serials := batch_take / 1000;
+        select count(*) into serial_count from public."serial_numbers"
+          where store_id = p_store_id and product_id = product_row.id and batch_id = batch_row.id
+            and status = 'AVAILABLE' and deleted_at is null;
+        if serial_count < needed_serials then raise exception 'serial numbers are no longer available'; end if;
+        for serial_row in select id from public."serial_numbers"
+          where store_id = p_store_id and product_id = product_row.id and batch_id = batch_row.id
+            and status = 'AVAILABLE' and deleted_at is null order by serial_number limit needed_serials
+          for update
+        loop
+          update public."serial_numbers" set status = 'SOLD', sale_line_id = line_id, updated_at = created_at_ms
+            where store_id = p_store_id and id = serial_row.id;
+        end loop;
+      end if;
+      gross_left := gross_left - alloc_gross;
+      discount_left := discount_left - alloc_discount;
+      remaining := remaining - batch_take;
+    end loop;
+    if remaining > 0 then
+      if not allow_negative or product_row.serial_tracked <> 0 then raise exception 'insufficient stock'; end if;
+      alloc_gross := gross_left;
+      alloc_discount := discount_left;
+      rate := product_row.gst_rate_bp::numeric;
+      if product_row.tax_inclusive <> 0 then
+        taxable := public.storevia_round_half_up((alloc_gross - alloc_discount)::numeric * 10000 / (10000 + rate));
+        tax := alloc_gross - alloc_discount - taxable;
+      else
+        taxable := alloc_gross - alloc_discount;
+        tax := public.storevia_round_half_up(taxable::numeric * rate / 10000);
+      end if;
+      if inter_state then cgst := 0; sgst := 0; igst := tax;
+      else cgst := public.storevia_round_half_up(tax::numeric / 2); sgst := tax - cgst; igst := 0; end if;
+      line_total := taxable + tax;
+      insert into public."sale_lines" (
+        id, sale_id, product_id, batch_id, name_snapshot, hsn_snapshot, qty_milli,
+        unit_price_paise, discount_paise, gst_rate_bp, tax_inclusive, taxable_value_paise,
+        cgst_paise, sgst_paise, igst_paise, line_total_paise, cost_snapshot_paise,
+        returned_qty_milli, returned_amount_paise, store_id
+      ) values (
+        gen_random_uuid()::text, sale_id, product_row.id, null, product_row.name, product_row.hsn_code, remaining,
+        (item->>'unit_price_paise')::bigint, alloc_discount, product_row.gst_rate_bp,
+        product_row.tax_inclusive, taxable, cgst, sgst, igst, line_total, product_row.cost_paise,
+        0, 0, p_store_id
+      );
+      insert into public."stock_movements" (
+        id, product_id, branch_id, batch_id, type, qty_milli, unit_cost_paise, ref_type, ref_id, created_at, store_id
+      ) values (gen_random_uuid()::text, product_row.id, branch, null, 'SALE', -remaining,
+        product_row.cost_paise, 'SALE', sale_id, created_at_ms, p_store_id);
+    end if;
+  end loop;
+
+  select coalesce(sum(taxable_value_paise), 0), coalesce(sum(discount_paise), 0),
+    coalesce(sum(cgst_paise + sgst_paise + igst_paise), 0), coalesce(sum(line_total_paise), 0)
+    into subtotal, discount_total, tax_total, line_sum
+    from public."sale_lines" sl where sl.store_id = p_store_id and sl.sale_id = sale_id;
+  total := public.storevia_round_half_up(line_sum::numeric / 100) * 100;
+  round_off := total - line_sum;
+  if paid > total then raise exception 'payment exceeds bill total'; end if;
+  credit := total - paid;
+  if credit > 0 and customer_id is null and not coalesce((p_payload->>'quote')::boolean, false) then
+    raise exception 'choose a customer to sell on credit';
+  end if;
+  if credit > 0 and customer_id is not null and actor_role = 'CASHIER' then raise exception 'credit sale requires manager approval'; end if;
+  if customer_id is not null and not exists (select 1 from public."customers"
+    where store_id = p_store_id and id = customer_id and deleted_at is null and is_active = 1) then
+    raise exception 'customer is unavailable';
+  end if;
+  if credit > 0 and customer_id is not null and (select credit_limit_paise from public."customers"
+      where store_id = p_store_id and id = customer_id) is not null
+      and (select coalesce(sum(cl.amount_paise), 0) from public."customer_ledger" cl
+        where cl.store_id = p_store_id and cl.customer_id = customer_id) + credit >
+      (select credit_limit_paise from public."customers" where store_id = p_store_id and id = customer_id) then
+    raise exception 'credit limit exceeded';
+  end if;
+
+  update public."sales" set subtotal_paise = subtotal, discount_paise = discount_total,
+    tax_paise = tax_total, round_off_paise = round_off, total_paise = total, paid_paise = paid
+    where store_id = p_store_id and id = sale_id;
+  -- Sale lines were inserted first so each line and stock event is covered by this transaction.
+  for pay in select value from jsonb_array_elements(payments) loop
+    insert into public."payments" (id, sale_id, customer_id, method, amount_paise, reference, created_at, store_id)
+    values (gen_random_uuid()::text, sale_id, customer_id, pay->>'method',
+      (pay->>'amount_paise')::bigint, nullif(pay->>'reference', ''), created_at_ms, p_store_id);
+  end loop;
+  if credit > 0 and customer_id is not null then
+    insert into public."customer_ledger" (id, customer_id, type, amount_paise, ref_type, ref_id, created_at, store_id)
+    values (gen_random_uuid()::text, customer_id, 'SALE_ON_CREDIT', credit, 'SALE', sale_id, created_at_ms, p_store_id);
+  end if;
+  insert into public.storevia_transaction_receipts (store_id, request_id, operation, result_id)
+    values (p_store_id, p_request_id, 'CHECKOUT', sale_id);
+  return sale_id;
+end;
+$$;
+
+create or replace function public.storevia_return_sale(
+  p_store_id text,
+  p_sale_id text,
+  p_request_id text,
+  p_payload jsonb
+) returns text
+language plpgsql security definer set search_path = public as $$
+declare
+  receipt public.storevia_transaction_receipts%rowtype;
+  sale_row public."sales"%rowtype;
+  requested jsonb;
+  item jsonb;
+  sale_line record;
+  return_id text := gen_random_uuid()::text;
+  created_at_ms bigint := coalesce((p_payload->>'created_at')::bigint, (extract(epoch from clock_timestamp()) * 1000)::bigint);
+  qty bigint;
+  remaining bigint;
+  take_qty bigint;
+  amount bigint;
+  total bigint := 0;
+  due_reduced bigint;
+  refund bigint;
+  method text := coalesce(p_payload->>'refund_method', 'CASH');
+  kept_credit boolean := coalesce(p_payload->>'refund_mode', 'MONEY') = 'KHATA_CREDIT';
+  all_returned boolean;
+  serial_count integer;
+  serial_required integer;
+begin
+  if auth.uid() is null or not public.can_write(p_store_id, array['OWNER','MANAGER']) then
+    raise exception 'cloud return write access required';
+  end if;
+  select * into receipt from public.storevia_transaction_receipts
+    where store_id = p_store_id and request_id = p_request_id;
+  if found then
+    if receipt.operation <> 'RETURN' then raise exception 'request id was already used for another operation'; end if;
+    return receipt.result_id;
+  end if;
+  select * into sale_row from public."sales"
+    where store_id = p_store_id and id = p_sale_id for update;
+  if not found then raise exception 'sale was not found'; end if;
+  if sale_row.status = 'CANCELLED' then raise exception 'sale is cancelled'; end if;
+  requested := coalesce(p_payload->'items', '[]'::jsonb);
+  if jsonb_typeof(requested) <> 'array' or jsonb_array_length(requested) = 0 then raise exception 'nothing to return'; end if;
+  for item in select value from jsonb_array_elements(requested) loop
+    qty := (item->>'qty_milli')::bigint;
+    if qty <= 0 then raise exception 'return quantity must be positive'; end if;
+    remaining := qty;
+    for sale_line in select * from public."sale_lines"
+      where store_id = p_store_id and sale_id = p_sale_id and product_id = item->>'product_id'
+        and returned_qty_milli < qty_milli order by server_updated_at, id for update
+    loop
+      exit when remaining = 0;
+      take_qty := least(remaining, sale_line.qty_milli - sale_line.returned_qty_milli);
+      if exists (select 1 from public."stock_movements" sm
+        where sm.store_id = p_store_id and sm.ref_type = 'RECIPE_SALE' and sm.reason = sale_line.id) then
+        raise exception 'cloud return for recipe sales is not supported by this transaction version';
+      end if;
+      amount := case when take_qty = sale_line.qty_milli - sale_line.returned_qty_milli
+        then sale_line.line_total_paise - sale_line.returned_amount_paise
+        else public.storevia_round_half_up(sale_line.line_total_paise::numeric * take_qty / sale_line.qty_milli) end;
+      update public."sale_lines" set returned_qty_milli = returned_qty_milli + take_qty,
+        returned_amount_paise = returned_amount_paise + amount
+        where store_id = p_store_id and id = sale_line.id;
+      insert into public."sale_return_lines" (
+        id, return_id, sale_line_id, product_id, batch_id, qty_milli, amount_paise, cost_snapshot_paise, store_id
+      ) values (gen_random_uuid()::text, return_id, sale_line.id, sale_line.product_id,
+        sale_line.batch_id, take_qty, amount, sale_line.cost_snapshot_paise, p_store_id);
+      if sale_line.batch_id is not null then
+        update public."batches" set qty_on_hand_milli = qty_on_hand_milli + take_qty,
+          updated_at = created_at_ms
+          where store_id = p_store_id and id = sale_line.batch_id;
+      end if;
+      insert into public."stock_movements" (
+        id, product_id, branch_id, batch_id, type, qty_milli, unit_cost_paise,
+        ref_type, ref_id, created_at, store_id
+      ) values (gen_random_uuid()::text, sale_line.product_id, sale_row.branch_id, sale_line.batch_id,
+        'SALE_RETURN', take_qty, sale_line.cost_snapshot_paise, 'RETURN', return_id, created_at_ms, p_store_id);
+      if exists (select 1 from public."serial_numbers" sn
+        where sn.store_id = p_store_id and sn.sale_line_id = sale_line.id and sn.status = 'SOLD') then
+        if take_qty % 1000 <> 0 then raise exception 'serial-tracked returns require whole units'; end if;
+        serial_required := take_qty / 1000;
+        select count(*) into serial_count from public."serial_numbers" sn
+          where sn.store_id = p_store_id and sn.sale_line_id = sale_line.id and sn.status = 'SOLD';
+        if serial_count < serial_required then raise exception 'serial return state is invalid'; end if;
+        update public."serial_numbers" set status = 'AVAILABLE', sale_line_id = null, updated_at = created_at_ms
+          where store_id = p_store_id and id in (
+            select sn.id from public."serial_numbers" sn
+            where sn.store_id = p_store_id and sn.sale_line_id = sale_line.id and sn.status = 'SOLD'
+            order by sn.serial_number limit serial_required
+          );
+      end if;
+      total := total + amount;
+      remaining := remaining - take_qty;
+    end loop;
+    if remaining > 0 then raise exception 'return quantity exceeds remaining sold quantity'; end if;
+  end loop;
+  if total = 0 then raise exception 'nothing to return'; end if;
+  due_reduced := case when sale_row.customer_id is null then 0
+    else least(total, greatest(sale_row.total_paise - sale_row.returned_paise - sale_row.paid_paise, 0)) end;
+  refund := total - due_reduced;
+  if kept_credit and refund > 0 and sale_row.customer_id is null then raise exception 'khata credit requires a customer'; end if;
+  if method not in ('CASH','UPI','CARD','OTHER') then raise exception 'invalid refund method'; end if;
+  insert into public."sale_returns" (
+    id, sale_id, customer_id, total_paise, due_reduced_paise, refund_paise,
+    refund_method, kept_as_credit, created_at, store_id
+  ) values (return_id, p_sale_id, sale_row.customer_id, total, due_reduced, refund,
+    case when refund > 0 and not kept_credit then method else null end, kept_credit::int, created_at_ms, p_store_id);
+  if sale_row.customer_id is not null and (due_reduced > 0 or (kept_credit and refund > 0)) then
+    insert into public."customer_ledger" (
+      id, customer_id, type, amount_paise, ref_type, ref_id, created_at, store_id
+    ) values (gen_random_uuid()::text, sale_row.customer_id, 'RETURN_CREDIT',
+      -(due_reduced + case when kept_credit then refund else 0 end), 'RETURN', return_id, created_at_ms, p_store_id);
+  end if;
+  if refund > 0 and not kept_credit then
+    insert into public."payments" (id, sale_id, customer_id, method, amount_paise, reference, created_at, store_id)
+    values (gen_random_uuid()::text, p_sale_id, sale_row.customer_id, method, -refund, 'RETURN', created_at_ms, p_store_id);
+  end if;
+  select not exists (select 1 from public."sale_lines"
+    where store_id = p_store_id and sale_id = p_sale_id and returned_qty_milli < qty_milli) into all_returned;
+  update public."sales" set returned_paise = returned_paise + total, paid_paise = paid_paise - refund,
+    status = case when all_returned then 'RETURNED' else 'PARTIAL_RETURN' end
+    where store_id = p_store_id and id = p_sale_id;
+  insert into public.storevia_transaction_receipts (store_id, request_id, operation, result_id)
+    values (p_store_id, p_request_id, 'RETURN', return_id);
+  return return_id;
+end;
+$$;
+
+create or replace function public.storevia_cancel_sale(
+  p_store_id text,
+  p_sale_id text,
+  p_request_id text,
+  p_reason text,
+  p_created_at bigint
+) returns text
+language plpgsql security definer set search_path = public as $$
+declare
+  receipt public.storevia_transaction_receipts%rowtype;
+  sale_row public."sales"%rowtype;
+  refund_method text;
+  return_request text := p_request_id || ':return';
+  items jsonb;
+  return_payload jsonb;
+begin
+  if auth.uid() is null or not public.can_write(p_store_id, array['OWNER','MANAGER']) then
+    raise exception 'cloud cancellation write access required';
+  end if;
+  select * into receipt from public.storevia_transaction_receipts
+    where store_id = p_store_id and request_id = p_request_id;
+  if found then
+    if receipt.operation <> 'CANCEL' then raise exception 'request id was already used for another operation'; end if;
+    return receipt.result_id;
+  end if;
+  select * into sale_row from public."sales" where store_id = p_store_id and id = p_sale_id for update;
+  if not found then raise exception 'sale was not found'; end if;
+  if sale_row.status = 'CANCELLED' then raise exception 'sale is already cancelled'; end if;
+  if sale_row.status <> 'COMPLETED' or sale_row.returned_paise > 0 then raise exception 'sale has returns'; end if;
+  select method into refund_method from public."payments"
+    where store_id = p_store_id and sale_id = p_sale_id and amount_paise > 0
+    order by amount_paise desc, created_at limit 1;
+  select jsonb_agg(jsonb_build_object('product_id', product_id, 'qty_milli', sum_qty))
+    into items from (
+      select product_id, sum(qty_milli)::bigint as sum_qty from public."sale_lines"
+      where store_id = p_store_id and sale_id = p_sale_id group by product_id
+    ) q;
+  return_payload := jsonb_build_object('created_at', p_created_at, 'refund_mode', 'MONEY',
+    'refund_method', coalesce(refund_method, 'CASH'), 'items', coalesce(items, '[]'::jsonb));
+  perform public.storevia_return_sale(p_store_id, p_sale_id, return_request, return_payload);
+  update public."sales" set status = 'CANCELLED', cancel_reason = nullif(btrim(p_reason), ''),
+    cancelled_at = p_created_at where store_id = p_store_id and id = p_sale_id;
+  insert into public.storevia_transaction_receipts (store_id, request_id, operation, result_id)
+    values (p_store_id, p_request_id, 'CANCEL', p_sale_id);
+  return p_sale_id;
+end;
+$$;
+
+create or replace function public.storevia_adjust_stock(
+  p_store_id text,
+  p_request_id text,
+  p_batch_id text,
+  p_type text,
+  p_qty_milli bigint,
+  p_note text,
+  p_created_at bigint
+) returns text
+language plpgsql security definer set search_path = public as $$
+declare
+  receipt public.storevia_transaction_receipts%rowtype;
+  batch_row public."batches"%rowtype;
+  signed_qty bigint;
+  branch text;
+begin
+  if auth.uid() is null or not public.can_write(p_store_id, array['OWNER','MANAGER']) then
+    raise exception 'cloud stock adjustment write access required';
+  end if;
+  if p_type not in ('DAMAGE','EXPIRED','ADJUSTMENT_IN','ADJUSTMENT_OUT') then raise exception 'invalid stock adjustment type'; end if;
+  if p_qty_milli is null or p_qty_milli <= 0 then raise exception 'quantity must be positive'; end if;
+  select * into receipt from public.storevia_transaction_receipts
+    where store_id = p_store_id and request_id = p_request_id;
+  if found then
+    if receipt.operation <> 'STOCK_ADJUST' then raise exception 'request id was already used for another operation'; end if;
+    return receipt.result_id;
+  end if;
+  select * into batch_row from public."batches"
+    where store_id = p_store_id and id = p_batch_id and deleted_at is null for update;
+  if not found then raise exception 'batch was not found'; end if;
+  signed_qty := case when p_type = 'ADJUSTMENT_IN' then p_qty_milli else -p_qty_milli end;
+  if signed_qty < 0 and batch_row.qty_on_hand_milli < p_qty_milli then raise exception 'adjustment exceeds on-hand stock'; end if;
+  update public."batches" set qty_on_hand_milli = qty_on_hand_milli + signed_qty,
+    updated_at = p_created_at where store_id = p_store_id and id = p_batch_id;
+  branch := batch_row.branch_id;
+  insert into public."stock_movements" (
+    id, product_id, branch_id, batch_id, type, qty_milli, unit_cost_paise,
+    ref_type, ref_id, reason, created_at, store_id
+  ) values (gen_random_uuid()::text, batch_row.product_id, branch, p_batch_id, p_type,
+    signed_qty, batch_row.cost_paise, 'MANUAL', p_batch_id, nullif(btrim(p_note), ''), p_created_at, p_store_id);
+  insert into public.storevia_transaction_receipts (store_id, request_id, operation, result_id)
+    values (p_store_id, p_request_id, 'STOCK_ADJUST', p_batch_id);
+  return p_batch_id;
+end;
+$$;
+
+create or replace function public.storevia_quote_sale(
+  p_store_id text,
+  p_request_id text,
+  p_payload jsonb
+) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  sale_id text;
+  quote jsonb;
+  error_detail text;
+begin
+  begin
+    sale_id := public.storevia_checkout(p_store_id, p_request_id, p_payload);
+    select jsonb_build_object(
+      'subtotal_paise', s.subtotal_paise,
+      'discount_paise', s.discount_paise,
+      'tax_paise', s.tax_paise,
+      'round_off_paise', s.round_off_paise,
+      'total_paise', s.total_paise,
+      'sold_against_negative_stock', exists (
+        select 1 from public."stock_movements" sm
+        where sm.store_id = p_store_id and sm.ref_type = 'SALE' and sm.ref_id = sale_id and sm.batch_id is null
+      )
+    ) into quote
+    from public."sales" s where s.store_id = p_store_id and s.id = sale_id;
+    raise exception using errcode = 'PZ001', message = 'quote complete', detail = quote::text;
+  exception when sqlstate 'PZ001' then
+    get stacked diagnostics error_detail = pg_exception_detail;
+    return error_detail::jsonb;
+  end;
+end;
+$$;
+
+create or replace function public.storevia_quote_return(
+  p_store_id text,
+  p_sale_id text,
+  p_items jsonb
+) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  sale_row public."sales"%rowtype;
+  item jsonb;
+  sale_line record;
+  wanted bigint;
+  remaining bigint;
+  take_qty bigint;
+  amount bigint;
+  total bigint := 0;
+  due_reduced bigint;
+begin
+  if auth.uid() is null or not public.can_write(p_store_id, array['OWNER','MANAGER']) then
+    raise exception 'cloud return read access required';
+  end if;
+  select * into sale_row from public."sales"
+    where store_id = p_store_id and id = p_sale_id;
+  if not found then raise exception 'sale was not found'; end if;
+  if sale_row.status = 'CANCELLED' then raise exception 'sale is cancelled'; end if;
+  if jsonb_typeof(p_items) <> 'array' or jsonb_array_length(p_items) = 0 then raise exception 'nothing to return'; end if;
+  for item in select value from jsonb_array_elements(p_items) loop
+    wanted := (item->>'qty_milli')::bigint;
+    if wanted <= 0 then raise exception 'return quantity must be positive'; end if;
+    remaining := wanted;
+    for sale_line in select * from public."sale_lines"
+      where store_id = p_store_id and sale_id = p_sale_id and product_id = item->>'product_id'
+        and returned_qty_milli < qty_milli order by server_updated_at, id
+    loop
+      exit when remaining = 0;
+      take_qty := least(remaining, sale_line.qty_milli - sale_line.returned_qty_milli);
+      amount := case when take_qty = sale_line.qty_milli - sale_line.returned_qty_milli
+        then sale_line.line_total_paise - sale_line.returned_amount_paise
+        else public.storevia_round_half_up(sale_line.line_total_paise::numeric * take_qty / sale_line.qty_milli) end;
+      total := total + amount;
+      remaining := remaining - take_qty;
+    end loop;
+    if remaining > 0 then raise exception 'return quantity exceeds remaining sold quantity'; end if;
+  end loop;
+  if total = 0 then raise exception 'nothing to return'; end if;
+  due_reduced := case when sale_row.customer_id is null then 0
+    else least(total, greatest(sale_row.total_paise - sale_row.returned_paise - sale_row.paid_paise, 0)) end;
+  return jsonb_build_object(
+    'total_paise', total,
+    'due_reduced_paise', due_reduced,
+    'refund_paise', total - due_reduced
+  );
+end;
+$$;
+
+revoke all on function public.storevia_round_half_up(numeric) from public, anon, authenticated;
+revoke all on function public.storevia_checkout(text,text,jsonb) from public, anon, authenticated;
+revoke all on function public.storevia_return_sale(text,text,text,jsonb) from public, anon, authenticated;
+revoke all on function public.storevia_cancel_sale(text,text,text,text,bigint) from public, anon, authenticated;
+revoke all on function public.storevia_adjust_stock(text,text,text,text,bigint,text,bigint) from public, anon, authenticated;
+revoke all on function public.storevia_quote_sale(text,text,jsonb) from public, anon, authenticated;
+revoke all on function public.storevia_quote_return(text,text,jsonb) from public, anon, authenticated;
+grant execute on function public.storevia_checkout(text,text,jsonb) to authenticated;
+grant execute on function public.storevia_return_sale(text,text,text,jsonb) to authenticated;
+grant execute on function public.storevia_cancel_sale(text,text,text,text,bigint) to authenticated;
+grant execute on function public.storevia_adjust_stock(text,text,text,text,bigint,text,bigint) to authenticated;
+grant execute on function public.storevia_quote_sale(text,text,jsonb) to authenticated;
+grant execute on function public.storevia_quote_return(text,text,jsonb) to authenticated;
+
+-- Included migration: 20261105000300_cloud_party_store_integrity.sql
+-- Keep customer/supplier ledger references inside the same selected cloud store.
+-- NOT VALID preserves pre-existing rows while enforcing the constraint for new writes.
+create unique index if not exists customers_store_id_id_unique
+    on public.customers (store_id, id);
+
+create unique index if not exists suppliers_store_id_id_unique
+    on public.suppliers (store_id, id);
+
+do $$
+begin
+    if not exists (
+        select 1 from pg_constraint
+        where conname = 'customer_ledger_store_customer_fk'
+          and conrelid = 'public.customer_ledger'::regclass
+    ) then
+        alter table public.customer_ledger
+            add constraint customer_ledger_store_customer_fk
+            foreign key (store_id, customer_id)
+            references public.customers (store_id, id)
+            not valid;
+    end if;
+
+    if not exists (
+        select 1 from pg_constraint
+        where conname = 'supplier_ledger_store_supplier_fk'
+          and conrelid = 'public.supplier_ledger'::regclass
+    ) then
+        alter table public.supplier_ledger
+            add constraint supplier_ledger_store_supplier_fk
+            foreign key (store_id, supplier_id)
+            references public.suppliers (store_id, id)
+            not valid;
+    end if;
+end
+$$;
+
+-- Included migration: 20261105000400_cloud_customer_payment.sql
+create table if not exists public.storevia_customer_payment_receipts (
+  store_id text not null,
+  request_id text not null,
+  result_id text not null,
+  created_at timestamptz not null default now(),
+  primary key (store_id, request_id)
+);
+alter table public.storevia_customer_payment_receipts enable row level security;
+revoke all on public.storevia_customer_payment_receipts from public, anon, authenticated;
+
+create or replace function public.storevia_receive_customer_payment(
+  p_store_id text,
+  p_customer_id text,
+  p_amount_paise bigint,
+  p_method text,
+  p_request_id text,
+  p_created_at bigint
+) returns text
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+declare
+  receipt public.storevia_customer_payment_receipts%rowtype;
+  customer_row public.customers%rowtype;
+  sale_row public.sales%rowtype;
+  payment_id text;
+  first_payment_id text;
+  left_to_allocate bigint;
+  amount_to_allocate bigint;
+  balance_paise bigint;
+begin
+  if auth.uid() is null or not public.can_write(p_store_id, array['OWNER', 'MANAGER', 'CASHIER']) then
+    raise exception 'cloud customer payment write access required';
+  end if;
+  if p_request_id is null or btrim(p_request_id) = '' then
+    raise exception 'request id is required';
+  end if;
+  if p_amount_paise is null or p_amount_paise <= 0 then
+    raise exception 'payment amount must be positive';
+  end if;
+  if p_method not in ('CASH', 'UPI', 'CARD', 'OTHER') then
+    raise exception 'payment method is invalid';
+  end if;
+
+  select * into customer_row
+  from public.customers
+  where store_id = p_store_id and id = p_customer_id
+    and deleted_at is null and is_active <> 0
+  for update;
+  if not found then raise exception 'customer not found'; end if;
+
+  select * into receipt
+  from public.storevia_customer_payment_receipts
+  where store_id = p_store_id and request_id = p_request_id;
+  if found then return receipt.result_id; end if;
+
+  select coalesce(sum(amount_paise), 0) into balance_paise
+  from public.customer_ledger
+  where store_id = p_store_id and customer_id = p_customer_id;
+  if p_amount_paise > balance_paise then raise exception 'payment exceeds balance'; end if;
+
+  left_to_allocate := p_amount_paise;
+  for sale_row in
+    select * from public.sales
+    where store_id = p_store_id and customer_id = p_customer_id
+      and status <> 'CANCELLED'
+      and total_paise - returned_paise > paid_paise
+    order by created_at asc, id asc
+    for update
+  loop
+    exit when left_to_allocate = 0;
+    amount_to_allocate := least(
+      sale_row.total_paise - sale_row.returned_paise - sale_row.paid_paise,
+      left_to_allocate
+    );
+    if amount_to_allocate <= 0 then continue; end if;
+    payment_id := gen_random_uuid()::text;
+    first_payment_id := coalesce(first_payment_id, payment_id);
+    insert into public.payments (
+      id, sale_id, customer_id, method, amount_paise, reference, created_at, store_id
+    ) values (
+      payment_id,
+      sale_row.id, p_customer_id, p_method, amount_to_allocate, null,
+      p_created_at, p_store_id
+    );
+    update public.sales
+    set paid_paise = paid_paise + amount_to_allocate
+    where store_id = p_store_id and id = sale_row.id;
+    left_to_allocate := left_to_allocate - amount_to_allocate;
+  end loop;
+
+  if left_to_allocate > 0 then
+    payment_id := gen_random_uuid()::text;
+    first_payment_id := coalesce(first_payment_id, payment_id);
+    insert into public.payments (
+      id, sale_id, customer_id, method, amount_paise, reference, created_at, store_id
+    ) values (
+      payment_id, null, p_customer_id, p_method, left_to_allocate, null,
+      p_created_at, p_store_id
+    );
+  end if;
+
+  insert into public.customer_ledger (
+    id, customer_id, type, amount_paise, ref_type, ref_id, created_at, store_id
+  ) values (
+    gen_random_uuid()::text, p_customer_id, 'PAYMENT_RECEIVED', -p_amount_paise,
+    'PAYMENT', first_payment_id, p_created_at, p_store_id
+  );
+
+  insert into public.storevia_customer_payment_receipts (store_id, request_id, result_id)
+  values (p_store_id, p_request_id, first_payment_id);
+  return first_payment_id;
+end;
+$$;
+
+revoke all on function public.storevia_receive_customer_payment(text, text, bigint, text, text, bigint) from public;
+grant execute on function public.storevia_receive_customer_payment(text, text, bigint, text, text, bigint) to authenticated;
+
+-- Included migration: 20261105000500_cloud_purchases_receiving.sql
+-- Atomic, store-scoped purchasing and receiving operations.
+-- Apply after supabase/schema.sql and the cloud sales/inventory migration.
+
+create or replace function public.storevia_record_purchase(
+  p_store_id text,
+  p_request_id text,
+  p_payload jsonb
+) returns text
+language plpgsql security definer set search_path = public as $$
+#variable_conflict use_variable
+declare
+  receipt public.storevia_transaction_receipts%rowtype;
+  purchase_id text := gen_random_uuid()::text;
+  branch_id text := nullif(p_payload->>'branch_id', '');
+  supplier_id text := nullif(p_payload->>'supplier_id', '');
+  invoice_no text := nullif(btrim(p_payload->>'invoice_no'), '');
+  purchase_date bigint := coalesce((p_payload->>'purchase_date')::bigint, (extract(epoch from clock_timestamp()) * 1000)::bigint);
+  created_at bigint := coalesce((p_payload->>'created_at')::bigint, (extract(epoch from clock_timestamp()) * 1000)::bigint);
+  bill_total bigint := (p_payload->>'bill_total_paise')::bigint;
+  paid bigint := coalesce((p_payload->>'paid_paise')::bigint, 0);
+  pay_method text := nullif(p_payload->>'pay_method', '');
+  items jsonb := coalesce(p_payload->'items', '[]'::jsonb);
+  item jsonb;
+  product_row public."products"%rowtype;
+  batch_id text;
+  line_id text;
+  qty bigint;
+  cost bigint;
+  line_total bigint;
+  calculated_total bigint := 0;
+  serials jsonb;
+  serial text;
+begin
+  if p_store_id is null or p_request_id is null or not public.can_write(p_store_id, array['OWNER','MANAGER']) then
+    raise exception 'Purchase access denied';
+  end if;
+  select * into receipt from public.storevia_transaction_receipts
+    where store_id = p_store_id and request_id = p_request_id and operation = 'record_purchase';
+  if found then return receipt.result_id; end if;
+
+  if jsonb_typeof(items) <> 'array' or jsonb_array_length(items) = 0 then
+    raise exception 'Purchase must contain at least one line';
+  end if;
+  if exists (
+    select 1 from jsonb_array_elements(items) as line(value)
+      cross join lateral jsonb_array_elements_text(coalesce(line.value->'serial_numbers', '[]'::jsonb)) as serial(value)
+    group by serial.value having count(*) > 1
+  ) then raise exception 'Duplicate serial number in purchase'; end if;
+  if branch_id is null or not exists (
+    select 1 from public."branches" b where b.id = branch_id and b.store_id = p_store_id
+      and b.is_active <> 0 and b.deleted_at is null
+  ) then raise exception 'Purchase branch is not active in this store'; end if;
+  if supplier_id is not null and not exists (
+    select 1 from public."suppliers" s where s.id = supplier_id and s.store_id = p_store_id
+      and s.deleted_at is null
+  ) then raise exception 'Supplier does not belong to this store'; end if;
+
+  for item in select value from jsonb_array_elements(items) loop
+    select * into product_row from public."products" p
+      where p.id = item->>'product_id' and p.store_id = p_store_id
+        and p.deleted_at is null and p.is_active <> 0;
+    if not found then raise exception 'Purchase product does not belong to this store'; end if;
+    qty := (item->>'qty_milli')::bigint;
+    cost := (item->>'unit_cost_paise')::bigint;
+    if qty <= 0 or cost < 0 then raise exception 'Invalid purchase quantity or unit cost'; end if;
+    if product_row.track_expiry <> 0 and nullif(item->>'expiry_date', '') is null then
+      raise exception 'Expiry date is required for this product';
+    end if;
+    serials := coalesce(item->'serial_numbers', '[]'::jsonb);
+    if product_row.serial_tracked <> 0 then
+      if qty % 1000 <> 0 or jsonb_typeof(serials) <> 'array' or jsonb_array_length(serials) <> qty / 1000 then
+        raise exception 'Serial count does not match purchase quantity';
+      end if;
+      if (select count(distinct value) from jsonb_array_elements_text(serials)) <> jsonb_array_length(serials)
+        or exists (
+          select 1 from public."serial_numbers" sn
+          where sn.store_id = p_store_id and sn.deleted_at is null
+            and sn.serial_number in (select value from jsonb_array_elements_text(serials))
+        ) then raise exception 'Duplicate serial number'; end if;
+    elsif jsonb_array_length(serials) > 0 then
+      raise exception 'Serial numbers supplied for an untracked product';
+    end if;
+    calculated_total := calculated_total + floor((cost::numeric * qty::numeric + 500) / 1000)::bigint;
+  end loop;
+
+  bill_total := coalesce(bill_total, calculated_total);
+  if bill_total < 0 or paid < 0 or paid > bill_total then raise exception 'Invalid purchase total or payment'; end if;
+  if supplier_id is null and paid <> bill_total then raise exception 'Supplier is required for credit purchases'; end if;
+
+  insert into public."purchases" (
+    id, branch_id, supplier_id, invoice_no, purchase_date, total_paise, paid_paise,
+    pay_method, notes, created_at, store_id
+  ) values (
+    purchase_id, branch_id, supplier_id, invoice_no, purchase_date, bill_total, paid,
+    case when paid > 0 then coalesce(pay_method, 'CASH') else null end,
+    nullif(btrim(p_payload->>'notes'), ''), created_at, p_store_id
+  );
+
+  for item in select value from jsonb_array_elements(items) loop
+    select * into product_row from public."products" p
+      where p.id = item->>'product_id' and p.store_id = p_store_id;
+    qty := (item->>'qty_milli')::bigint;
+    cost := (item->>'unit_cost_paise')::bigint;
+    line_total := floor((cost::numeric * qty::numeric + 500) / 1000)::bigint;
+    batch_id := gen_random_uuid()::text;
+    line_id := gen_random_uuid()::text;
+    insert into public."batches" (
+      id, product_id, branch_id, batch_no, expiry_date, cost_paise, mrp_paise,
+      qty_received_milli, qty_on_hand_milli, received_at, updated_at, deleted_at, store_id
+    ) values (
+      batch_id, product_row.id, branch_id, nullif(btrim(item->>'batch_no'), ''),
+      nullif(item->>'expiry_date', ''), cost, nullif(item->>'mrp_paise', '')::bigint,
+      qty, qty, purchase_date, created_at, null, p_store_id
+    );
+    insert into public."purchase_lines" (
+      id, purchase_id, product_id, batch_id, name_snapshot, qty_milli, unit_cost_paise, line_total_paise, store_id
+    ) values (
+      line_id, purchase_id, product_row.id, batch_id,
+      concat_ws(' · ', product_row.name, nullif(product_row.variant_label, '')), qty, cost, line_total, p_store_id
+    );
+    insert into public."stock_movements" (
+      id, product_id, branch_id, batch_id, type, qty_milli, unit_cost_paise, ref_type, ref_id, created_at, store_id
+    ) values (
+      gen_random_uuid()::text, product_row.id, branch_id, batch_id, 'PURCHASE', qty, cost,
+      'PURCHASE', purchase_id, created_at, p_store_id
+    );
+    serials := coalesce(item->'serial_numbers', '[]'::jsonb);
+    for serial in select value from jsonb_array_elements_text(serials) loop
+      insert into public."serial_numbers" (
+        id, product_id, batch_id, serial_number, status, sale_line_id, updated_at, deleted_at, store_id
+      ) values (
+        gen_random_uuid()::text, product_row.id, batch_id, btrim(serial), 'AVAILABLE', null, created_at, null, p_store_id
+      );
+    end loop;
+    if coalesce((p_payload->>'update_product_cost')::boolean, true) then
+      update public."products" set cost_paise = cost, updated_at = created_at
+        where id = product_row.id and store_id = p_store_id;
+    end if;
+  end loop;
+
+  if supplier_id is not null then
+    insert into public."supplier_ledger" (
+      id, supplier_id, type, amount_paise, ref_type, ref_id, created_at, store_id
+    ) values (
+      gen_random_uuid()::text, supplier_id, 'PURCHASE', bill_total, 'PURCHASE', purchase_id, created_at, p_store_id
+    );
+    if paid > 0 then
+      insert into public."supplier_ledger" (
+        id, supplier_id, type, amount_paise, method, ref_type, ref_id, created_at, store_id
+      ) values (
+        gen_random_uuid()::text, supplier_id, 'PAYMENT', -paid, coalesce(pay_method, 'CASH'),
+        'PURCHASE', purchase_id, created_at, p_store_id
+      );
+    end if;
+  end if;
+  insert into public.storevia_transaction_receipts(store_id, request_id, operation, result_id)
+    values (p_store_id, p_request_id, 'record_purchase', purchase_id);
+  return purchase_id;
+end;
+$$;
+
+create or replace function public.storevia_edit_purchase(
+  p_store_id text,
+  p_request_id text,
+  p_purchase_id text,
+  p_payload jsonb
+) returns text
+language plpgsql security definer set search_path = public as $$
+#variable_conflict use_variable
+declare
+  receipt public.storevia_transaction_receipts%rowtype;
+  purchase_row public."purchases"%rowtype;
+  new_total bigint := (p_payload->>'total_paise')::bigint;
+  adjustment bigint;
+  now_ms bigint := coalesce((p_payload->>'updated_at')::bigint, (extract(epoch from clock_timestamp()) * 1000)::bigint);
+begin
+  if p_store_id is null or not public.can_write(p_store_id, array['OWNER','MANAGER']) then
+    raise exception 'Purchase access denied';
+  end if;
+  select * into receipt from public.storevia_transaction_receipts
+    where store_id = p_store_id and request_id = p_request_id and operation = 'edit_purchase';
+  if found then return receipt.result_id; end if;
+  select * into purchase_row from public."purchases"
+    where id = p_purchase_id and store_id = p_store_id for update;
+  if not found then raise exception 'Purchase not found in this store'; end if;
+  if new_total < purchase_row.paid_paise then raise exception 'New total is below the amount already paid'; end if;
+  adjustment := new_total - purchase_row.total_paise;
+  update public."purchases" set
+    invoice_no = nullif(btrim(p_payload->>'invoice_no'), ''),
+    purchase_date = coalesce((p_payload->>'purchase_date')::bigint, purchase_date),
+    total_paise = new_total,
+    notes = nullif(btrim(p_payload->>'notes'), '')
+    where id = p_purchase_id and store_id = p_store_id;
+  if purchase_row.supplier_id is not null and adjustment <> 0 then
+    insert into public."supplier_ledger" (
+      id, supplier_id, type, amount_paise, ref_type, ref_id, created_at, store_id
+    ) values (
+      gen_random_uuid()::text, purchase_row.supplier_id, 'ADJUSTMENT', adjustment,
+      'PURCHASE_EDIT', p_purchase_id, now_ms, p_store_id
+    );
+  end if;
+  insert into public.storevia_transaction_receipts(store_id, request_id, operation, result_id)
+    values (p_store_id, p_request_id, 'edit_purchase', p_purchase_id);
+  return p_purchase_id;
+end;
+$$;
+
+create or replace function public.storevia_receive_stock(
+  p_store_id text,
+  p_request_id text,
+  p_payload jsonb
+) returns text
+language plpgsql security definer set search_path = public as $$
+#variable_conflict use_variable
+declare
+  receipt public.storevia_transaction_receipts%rowtype;
+  product_row public."products"%rowtype;
+  branch_id text := nullif(p_payload->>'branch_id', '');
+  product_id text := nullif(p_payload->>'product_id', '');
+  qty bigint := (p_payload->>'qty_milli')::bigint;
+  cost bigint := coalesce((p_payload->>'cost_paise')::bigint, 0);
+  created_at bigint := coalesce((p_payload->>'created_at')::bigint, (extract(epoch from clock_timestamp()) * 1000)::bigint);
+  batch_id text := gen_random_uuid()::text;
+  serials jsonb := coalesce(p_payload->'serial_numbers', '[]'::jsonb);
+  serial text;
+begin
+  if p_store_id is null or not public.can_write(p_store_id, array['OWNER','MANAGER']) then
+    raise exception 'Stock receiving access denied';
+  end if;
+  select * into receipt from public.storevia_transaction_receipts
+    where store_id = p_store_id and request_id = p_request_id and operation = 'receive_stock';
+  if found then return receipt.result_id; end if;
+  if qty <= 0 or cost < 0 then raise exception 'Invalid stock quantity or cost'; end if;
+  if branch_id is null or not exists (
+    select 1 from public."branches" b where b.id = branch_id and b.store_id = p_store_id
+      and b.is_active <> 0 and b.deleted_at is null
+  ) then raise exception 'Receiving branch is not active in this store'; end if;
+  select * into product_row from public."products" p
+    where p.id = product_id and p.store_id = p_store_id and p.deleted_at is null and p.is_active <> 0;
+  if not found then raise exception 'Product does not belong to this store'; end if;
+  if product_row.track_expiry <> 0 and nullif(p_payload->>'expiry_date', '') is null then
+    raise exception 'Expiry date is required for this product';
+  end if;
+  if product_row.serial_tracked <> 0 then
+    if qty % 1000 <> 0 or jsonb_typeof(serials) <> 'array' or jsonb_array_length(serials) <> qty / 1000
+      or (select count(distinct value) from jsonb_array_elements_text(serials)) <> jsonb_array_length(serials)
+      or exists (
+        select 1 from public."serial_numbers" sn
+        where sn.store_id = p_store_id and sn.deleted_at is null
+          and sn.serial_number in (select value from jsonb_array_elements_text(serials))
+      ) then raise exception 'Invalid or duplicate serial numbers'; end if;
+  elsif jsonb_array_length(serials) > 0 then raise exception 'Serial numbers supplied for an untracked product'; end if;
+  insert into public."batches" (
+    id, product_id, branch_id, batch_no, expiry_date, cost_paise, mrp_paise,
+    qty_received_milli, qty_on_hand_milli, received_at, updated_at, deleted_at, store_id
+  ) values (
+    batch_id, product_id, branch_id, nullif(btrim(p_payload->>'batch_no'), ''),
+    nullif(p_payload->>'expiry_date', ''), cost, nullif(p_payload->>'mrp_paise', '')::bigint,
+    qty, qty, created_at, created_at, null, p_store_id
+  );
+  insert into public."stock_movements" (
+    id, product_id, branch_id, batch_id, type, qty_milli, unit_cost_paise, ref_type, ref_id, created_at, store_id
+  ) values (
+    gen_random_uuid()::text, product_id, branch_id, batch_id,
+    coalesce(nullif(p_payload->>'type', ''), 'PURCHASE'), qty, cost, 'MANUAL', batch_id, created_at, p_store_id
+  );
+  for serial in select value from jsonb_array_elements_text(serials) loop
+    insert into public."serial_numbers" (
+      id, product_id, batch_id, serial_number, status, sale_line_id, updated_at, deleted_at, store_id
+    ) values (
+      gen_random_uuid()::text, product_id, batch_id, btrim(serial), 'AVAILABLE', null, created_at, null, p_store_id
+    );
+  end loop;
+  insert into public.storevia_transaction_receipts(store_id, request_id, operation, result_id)
+    values (p_store_id, p_request_id, 'receive_stock', batch_id);
+  return batch_id;
+end;
+$$;
+
+create or replace function public.storevia_pay_supplier(
+  p_store_id text,
+  p_request_id text,
+  p_payload jsonb
+) returns text
+language plpgsql security definer set search_path = public as $$
+#variable_conflict use_variable
+declare
+  receipt public.storevia_transaction_receipts%rowtype;
+  supplier_id text := nullif(p_payload->>'supplier_id', '');
+  purchase_id text := nullif(p_payload->>'purchase_id', '');
+  amount bigint := (p_payload->>'amount_paise')::bigint;
+  created_at bigint := coalesce((p_payload->>'created_at')::bigint, (extract(epoch from clock_timestamp()) * 1000)::bigint);
+  purchase_row public."purchases"%rowtype;
+  supplier_balance bigint;
+  unallocated_balance bigint;
+  ledger_id text := gen_random_uuid()::text;
+begin
+  if p_store_id is null or not public.can_write(p_store_id, array['OWNER','MANAGER']) then
+    raise exception 'Supplier payment access denied';
+  end if;
+  select * into receipt from public.storevia_transaction_receipts
+    where store_id = p_store_id and request_id = p_request_id and operation = 'pay_supplier';
+  if found then return receipt.result_id; end if;
+  if amount <= 0 or not exists (
+    select 1 from public."suppliers" s where s.id = supplier_id and s.store_id = p_store_id and s.deleted_at is null
+  ) then raise exception 'Invalid supplier or payment amount'; end if;
+  perform pg_advisory_xact_lock(hashtext(p_store_id || ':' || supplier_id));
+  select coalesce(sum(amount_paise), 0) into supplier_balance from public."supplier_ledger"
+    where store_id = p_store_id and "supplier_id" = supplier_id;
+  if amount > supplier_balance then raise exception 'Payment exceeds supplier balance'; end if;
+  if purchase_id is not null then
+    select * into purchase_row from public."purchases"
+      where id = purchase_id and store_id = p_store_id and "supplier_id" = supplier_id for update;
+    if not found then raise exception 'Purchase does not belong to supplier'; end if;
+    if amount > purchase_row.total_paise - purchase_row.paid_paise then raise exception 'Payment exceeds purchase balance'; end if;
+    update public."purchases" set paid_paise = paid_paise + amount
+      where id = purchase_id and store_id = p_store_id;
+  else
+    select supplier_balance - coalesce((
+      select sum(total_paise - paid_paise) from public."purchases"
+      where store_id = p_store_id and "supplier_id" = supplier_id
+    ), 0) into unallocated_balance;
+    if amount > unallocated_balance then raise exception 'Payment exceeds unallocated supplier balance'; end if;
+  end if;
+  insert into public."supplier_ledger" (
+    id, supplier_id, type, amount_paise, method, ref_type, ref_id, created_at, store_id
+  ) values (
+    ledger_id, supplier_id, 'PAYMENT', -amount, nullif(p_payload->>'method', ''),
+    case when purchase_id is null then 'SUPPLIER_BALANCE' else 'PURCHASE' end,
+    purchase_id, created_at, p_store_id
+  );
+  insert into public.storevia_transaction_receipts(store_id, request_id, operation, result_id)
+    values (p_store_id, p_request_id, 'pay_supplier', ledger_id);
+  return ledger_id;
+end;
+$$;
+
+revoke all on function public.storevia_record_purchase(text,text,jsonb) from public, anon, authenticated;
+revoke all on function public.storevia_edit_purchase(text,text,text,jsonb) from public, anon, authenticated;
+revoke all on function public.storevia_receive_stock(text,text,jsonb) from public, anon, authenticated;
+revoke all on function public.storevia_pay_supplier(text,text,jsonb) from public, anon, authenticated;
+grant execute on function public.storevia_record_purchase(text,text,jsonb) to authenticated;
+grant execute on function public.storevia_edit_purchase(text,text,text,jsonb) to authenticated;
+grant execute on function public.storevia_receive_stock(text,text,jsonb) to authenticated;
+grant execute on function public.storevia_pay_supplier(text,text,jsonb) to authenticated;
+
+-- Included migration: 20261105000600_cloud_authoritative_staff_settings.sql
+-- Cloud staff identities are Supabase Auth users with store_members roles.
+-- Local PIN hashes and local staff records are deliberately not exposed by these RPCs.
+
+create or replace function public.storevia_list_store_members(p_store_id text)
+returns table(member_user_id uuid, role text, display_name text, created_at timestamptz)
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+begin
+  if auth.uid() is null or not public.is_member(p_store_id) then
+    raise exception 'store membership required';
+  end if;
+
+  return query
+    select m.user_id, m.role, m.display_name, m.created_at
+    from public.store_members m
+    where m.store_id = p_store_id
+    order by m.created_at, m.display_name nulls last, m.user_id;
+end;
+$$;
+
+revoke all on function public.storevia_list_store_members(text) from public, anon;
+grant execute on function public.storevia_list_store_members(text) to authenticated;
+
+create or replace function public.storevia_update_store_settings(
+  p_store_id text,
+  p_name text,
+  p_owner_name text,
+  p_address text,
+  p_city text,
+  p_phone text,
+  p_gstin text,
+  p_state_code text,
+  p_invoice_prefix text,
+  p_allow_negative_stock integer,
+  p_updated_at bigint
+) returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  changed integer;
+begin
+  if not public.can_write(p_store_id, array['OWNER']) then
+    raise exception 'store owner access required';
+  end if;
+  if btrim(p_name) = '' or p_allow_negative_stock not in (0, 1) then
+    raise exception 'invalid store settings';
+  end if;
+
+  update public."store"
+  set name = btrim(p_name),
+      owner_name = btrim(p_owner_name),
+      address = btrim(p_address),
+      city = btrim(p_city),
+      phone = btrim(p_phone),
+      gstin = nullif(btrim(p_gstin), ''),
+      state_code = p_state_code,
+      invoice_prefix = p_invoice_prefix,
+      allow_negative_stock = p_allow_negative_stock,
+      updated_at = p_updated_at
+  where store_id = p_store_id;
+  get diagnostics changed = row_count;
+  if changed = 0 then
+    raise exception 'cloud store not found';
+  end if;
+
+  insert into public."audit_log" (
+    id, created_at, actor_id, actor_name, actor_role, action, entity_type, entity_id, summary, store_id
+  )
+  select gen_random_uuid()::text, p_updated_at, auth.uid()::text,
+         coalesce(nullif(m.display_name, ''), 'Cloud user'), m.role,
+         'SETTINGS_CHANGED', 'STORE', p_store_id, 'Store settings changed', p_store_id
+  from public.store_members m
+  where m.store_id = p_store_id and m.user_id = auth.uid();
+end;
+$$;
+
+revoke all on function public.storevia_update_store_settings(text,text,text,text,text,text,text,text,text,integer,bigint)
+  from public, anon;
+grant execute on function public.storevia_update_store_settings(text,text,text,text,text,text,text,text,text,integer,bigint)
+  to authenticated;
+
+create or replace function public.storevia_add_branch(
+  p_store_id text,
+  p_branch_id text,
+  p_name text,
+  p_now bigint
+) returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not public.can_write(p_store_id, array['OWNER','MANAGER']) then
+    raise exception 'store branch management access required';
+  end if;
+  if btrim(p_name) = '' then
+    raise exception 'branch name required';
+  end if;
+  if exists (
+    select 1 from public."branches" b
+    where b.store_id = p_store_id and lower(b.name) = lower(btrim(p_name)) and b.deleted_at is null
+  ) then
+    raise exception 'branch name already exists';
+  end if;
+
+  insert into public."branches" (
+    id, name, address, city, phone, is_active, created_at, updated_at, deleted_at, store_id
+  ) values (p_branch_id, btrim(p_name), '', '', '', 1, p_now, p_now, null, p_store_id);
+
+  insert into public."audit_log" (
+    id, created_at, actor_id, actor_name, actor_role, action, entity_type, entity_id, summary, store_id
+  )
+  select gen_random_uuid()::text, p_now, auth.uid()::text,
+         coalesce(nullif(m.display_name, ''), 'Cloud user'), m.role,
+         'SETTINGS_CHANGED', 'BRANCH', p_branch_id, 'Branch added: ' || btrim(p_name), p_store_id
+  from public.store_members m
+  where m.store_id = p_store_id and m.user_id = auth.uid();
+end;
+$$;
+
+revoke all on function public.storevia_add_branch(text,text,text,bigint) from public, anon;
+grant execute on function public.storevia_add_branch(text,text,text,bigint) to authenticated;
+
+create or replace function public.storevia_rename_branch(
+  p_store_id text,
+  p_branch_id text,
+  p_name text,
+  p_now bigint
+) returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  previous_name text;
+begin
+  if not public.can_write(p_store_id, array['OWNER','MANAGER']) then
+    raise exception 'store branch management access required';
+  end if;
+  if btrim(p_name) = '' then
+    raise exception 'branch name required';
+  end if;
+  select b.name into previous_name
+  from public."branches" b
+  where b.store_id = p_store_id and b.id = p_branch_id and b.deleted_at is null
+  for update;
+  if not found then
+    raise exception 'cloud branch not found';
+  end if;
+  if exists (
+    select 1 from public."branches" b
+    where b.store_id = p_store_id and b.id <> p_branch_id
+      and lower(b.name) = lower(btrim(p_name)) and b.deleted_at is null
+  ) then
+    raise exception 'branch name already exists';
+  end if;
+
+  update public."branches"
+  set name = btrim(p_name), updated_at = p_now
+  where store_id = p_store_id and id = p_branch_id;
+
+  insert into public."audit_log" (
+    id, created_at, actor_id, actor_name, actor_role, action, entity_type, entity_id, summary, store_id
+  )
+  select gen_random_uuid()::text, p_now, auth.uid()::text,
+         coalesce(nullif(m.display_name, ''), 'Cloud user'), m.role,
+         'SETTINGS_CHANGED', 'BRANCH', p_branch_id,
+         'Branch renamed: ' || previous_name || ' -> ' || btrim(p_name), p_store_id
+  from public.store_members m
+  where m.store_id = p_store_id and m.user_id = auth.uid();
+end;
+$$;
+
+revoke all on function public.storevia_rename_branch(text,text,text,bigint) from public, anon;
+grant execute on function public.storevia_rename_branch(text,text,text,bigint) to authenticated;
+
+-- Included migration: 20261105000700_import_products.sql
+create or replace function public.storevia_import_products(
+  p_store_id text,
+  p_rows jsonb,
+  p_policy text,
+  p_branch_id text default null
+) returns jsonb
+language plpgsql
+security invoker
+set search_path = public, pg_temp
+as $$
+declare
+  row_data jsonb;
+  existing_id text;
+  barcode_owner text;
+  product_id text;
+  batch_id text;
+  now_ms bigint;
+  row_name text;
+  row_sku text;
+  row_barcode text;
+  row_unit_id text;
+  row_opening_qty bigint;
+  row_expiry text;
+  created_count integer := 0;
+  updated_count integer := 0;
+  skipped_count integer := 0;
+begin
+  if not public.can_write(p_store_id, array['OWNER', 'MANAGER']) then
+    raise exception 'You do not have permission to import products into this store.';
+  end if;
+  if p_policy not in ('SKIP', 'UPDATE') then
+    raise exception 'Unknown duplicate policy.';
+  end if;
+  if jsonb_typeof(p_rows) <> 'array' or jsonb_array_length(p_rows) = 0 then
+    raise exception 'No valid product rows were provided.';
+  end if;
+
+  perform pg_advisory_xact_lock(hashtextextended(p_store_id, 0));
+  now_ms := (extract(epoch from clock_timestamp()) * 1000)::bigint;
+
+  for row_data in select value from jsonb_array_elements(p_rows)
+  loop
+    row_name := btrim(coalesce(row_data->>'name', ''));
+    row_sku := nullif(btrim(coalesce(row_data->>'sku', '')), '');
+    row_barcode := nullif(btrim(coalesce(row_data->>'barcode', '')), '');
+    row_unit_id := coalesce(row_data->>'unit_id', '');
+    row_opening_qty := coalesce((row_data->>'opening_qty_milli')::bigint, 0);
+
+    if row_name = '' then raise exception 'A product name is required.'; end if;
+    if (row_data->>'price_paise')::bigint < 0 or (row_data->>'cost_paise')::bigint < 0 then
+      raise exception 'Product price and cost must not be negative.';
+    end if;
+    if coalesce((row_data->>'gst_rate_bp')::integer, -1) not between 0 and 10000 then
+      raise exception 'Product GST rate is invalid.';
+    end if;
+    if coalesce((row_data->>'min_stock_milli')::bigint, -1) < 0 or row_opening_qty < 0 then
+      raise exception 'Product quantities must not be negative.';
+    end if;
+    if jsonb_typeof(row_data->'tax_inclusive') is distinct from 'boolean' then
+      raise exception 'Product tax flag is invalid.';
+    end if;
+    if row_data->>'attributes_json' is not null and (
+      jsonb_typeof(row_data->'attributes_json') is distinct from 'string'
+      or jsonb_typeof((row_data->>'attributes_json')::jsonb) is distinct from 'object'
+    ) then
+      raise exception 'Product attributes must be a JSON object.';
+    end if;
+    if not exists (
+      select 1 from public."units" u where u.store_id = p_store_id and u."id" = row_unit_id
+    ) then
+      raise exception 'A product unit is no longer available in this store.';
+    end if;
+
+    row_expiry := nullif(row_data->>'expiry', '');
+    if row_expiry is not null then
+      perform row_expiry::date;
+    end if;
+
+    existing_id := null;
+    select p."id" into existing_id
+    from public."products" p
+    where p.store_id = p_store_id
+      and p."deleted_at" is null
+      and (
+        (row_barcode is not null and exists (
+          select 1 from public."product_barcodes" bc
+          where bc.store_id = p_store_id and bc."product_id" = p."id"
+            and bc."barcode" = row_barcode and bc."deleted_at" is null
+        ))
+        or (row_sku is not null and p."sku" = row_sku)
+        or (row_barcode is null and row_sku is null and lower(p."name") = lower(row_name))
+      )
+    order by case
+      when row_barcode is not null and exists (
+        select 1 from public."product_barcodes" bc
+        where bc.store_id = p_store_id and bc."product_id" = p."id"
+          and bc."barcode" = row_barcode and bc."deleted_at" is null
+      ) then 0
+      when row_sku is not null and p."sku" = row_sku then 1
+      else 2
+    end, p."id"
+    limit 1;
+
+    if row_barcode is not null then
+      select bc."product_id" into barcode_owner
+      from public."product_barcodes" bc
+      join public."products" p on p."id" = bc."product_id" and p.store_id = bc.store_id
+      where bc.store_id = p_store_id and bc."barcode" = row_barcode
+        and bc."deleted_at" is null and p."deleted_at" is null
+      order by bc."id" limit 1;
+    else
+      barcode_owner := null;
+    end if;
+
+    if existing_id is not null then
+      if p_policy = 'SKIP' or (barcode_owner is not null and barcode_owner <> existing_id) then
+        skipped_count := skipped_count + 1;
+        continue;
+      end if;
+      update public."products"
+      set "sku" = coalesce(row_sku, "sku"),
+          "hsn_code" = coalesce(nullif(row_data->>'hsn', ''), "hsn_code"),
+          "gst_rate_bp" = (row_data->>'gst_rate_bp')::integer,
+          "tax_inclusive" = case when (row_data->>'tax_inclusive')::boolean then 1 else 0 end,
+          "cost_paise" = (row_data->>'cost_paise')::bigint,
+          "sell_price_paise" = (row_data->>'price_paise')::bigint,
+          "mrp_paise" = coalesce(nullif(row_data->>'mrp_paise', '')::bigint, "mrp_paise"),
+          "min_stock_milli" = (row_data->>'min_stock_milli')::bigint,
+          "track_expiry" = case when row_expiry is not null then 1 else "track_expiry" end,
+          "attributes_json" = coalesce(nullif(row_data->>'attributes_json', ''), "attributes_json"),
+          "updated_at" = now_ms
+      where store_id = p_store_id and "id" = existing_id;
+      if row_barcode is not null and not exists (
+        select 1 from public."product_barcodes" bc
+        where bc.store_id = p_store_id and bc."product_id" = existing_id and bc."deleted_at" is null
+      ) then
+        insert into public."product_barcodes" (
+          "id", "product_id", "barcode", "updated_at", "deleted_at", store_id
+        ) values (gen_random_uuid()::text, existing_id, row_barcode, now_ms, null, p_store_id);
+      end if;
+      updated_count := updated_count + 1;
+      continue;
+    end if;
+
+    if barcode_owner is not null then
+      skipped_count := skipped_count + 1;
+      continue;
+    end if;
+    if row_opening_qty > 0 and (
+      p_branch_id is null or not exists (
+        select 1 from public."branches" b where b.store_id = p_store_id
+          and b."id" = p_branch_id and b."is_active" <> 0 and b."deleted_at" is null
+      )
+    ) then
+      raise exception 'Opening stock requires a valid active cloud branch.';
+    end if;
+
+    product_id := gen_random_uuid()::text;
+    insert into public."products" (
+      "id", "name", "sku", "unit_id", "hsn_code", "gst_rate_bp", "tax_inclusive",
+      "mrp_paise", "sell_price_paise", "cost_paise", "track_expiry", "serial_tracked",
+      "min_stock_milli", "is_active", "attributes_json", "created_at", "updated_at",
+      "deleted_at", store_id
+    ) values (
+      product_id, row_name, row_sku, row_unit_id, nullif(row_data->>'hsn', ''),
+      (row_data->>'gst_rate_bp')::integer,
+      case when (row_data->>'tax_inclusive')::boolean then 1 else 0 end,
+      nullif(row_data->>'mrp_paise', '')::bigint,
+      (row_data->>'price_paise')::bigint, (row_data->>'cost_paise')::bigint,
+      case when row_expiry is not null then 1 else 0 end, 0,
+      (row_data->>'min_stock_milli')::bigint, 1,
+      coalesce(nullif(row_data->>'attributes_json', ''), '{}'),
+      now_ms, now_ms, null, p_store_id
+    );
+    if row_barcode is not null then
+      insert into public."product_barcodes" (
+        "id", "product_id", "barcode", "updated_at", "deleted_at", store_id
+      ) values (gen_random_uuid()::text, product_id, row_barcode, now_ms, null, p_store_id);
+    end if;
+    if row_opening_qty > 0 then
+      batch_id := gen_random_uuid()::text;
+      insert into public."batches" (
+        "id", "product_id", "branch_id", "batch_no", "expiry_date", "cost_paise",
+        "mrp_paise", "qty_received_milli", "qty_on_hand_milli", "received_at",
+        "updated_at", "deleted_at", store_id
+      ) values (
+        batch_id, product_id, p_branch_id, nullif(row_data->>'batch_no', ''), row_expiry,
+        (row_data->>'cost_paise')::bigint, nullif(row_data->>'mrp_paise', '')::bigint,
+        row_opening_qty, row_opening_qty, now_ms, now_ms, null, p_store_id
+      );
+      insert into public."stock_movements" (
+        "id", "product_id", "branch_id", "batch_id", "type", "qty_milli",
+        "unit_cost_paise", "ref_type", "ref_id", "reason", "created_at", store_id
+      ) values (
+        gen_random_uuid()::text, product_id, p_branch_id, batch_id, 'OPENING',
+        row_opening_qty, (row_data->>'cost_paise')::bigint, 'IMPORT', batch_id, null,
+        now_ms, p_store_id
+      );
+    end if;
+    created_count := created_count + 1;
+  end loop;
+
+  return jsonb_build_object(
+    'created', created_count,
+    'updated', updated_count,
+    'skipped', skipped_count
+  );
+end;
+$$;
+
+-- Included migration: 20261105000800_cloud_held_carts.sql
+-- Held carts are synchronized across a store's devices and must exist in the
+-- cloud schema before any CLOUD-mode bootstrap reads the table.
+create table if not exists public.held_carts (
+  id text primary key,
+  label text not null,
+  customer_id text,
+  inter_state integer not null default 0,
+  bill_discount_paise bigint not null default 0,
+  items_json text not null,
+  item_count integer not null,
+  created_at bigint not null,
+  updated_at bigint not null,
+  deleted_at bigint,
+  store_id text not null,
+  server_updated_at timestamptz not null default clock_timestamp()
+);
+
+create index if not exists held_carts_sync_idx
+  on public.held_carts (store_id, server_updated_at, id);
+
+drop trigger if exists touch_server_updated_at on public.held_carts;
+create trigger touch_server_updated_at
+  before insert or update on public.held_carts
+  for each row execute function public.touch_server_updated_at();
+
+alter table public.held_carts enable row level security;
+drop policy if exists "members read" on public.held_carts;
+create policy "members read" on public.held_carts
+  for select using (public.is_member(store_id));
+drop policy if exists "writers insert" on public.held_carts;
+create policy "writers insert" on public.held_carts
+  for insert with check (public.can_write(store_id, array['OWNER','MANAGER','CASHIER']));
+drop policy if exists "writers update" on public.held_carts;
+create policy "writers update" on public.held_carts
+  for update using (public.can_write(store_id, array['OWNER','MANAGER','CASHIER']))
+  with check (public.can_write(store_id, array['OWNER','MANAGER','CASHIER']));
+
+notify pgrst, 'reload schema';
+
+-- Included migration: 20261105000900_fix_cloud_sale_quote.sql
+create or replace function public.storevia_quote_sale(
+  p_store_id text,
+  p_request_id text,
+  p_payload jsonb
+) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  v_sale_id text;
+  v_payload jsonb;
+  quote jsonb;
+  error_detail text;
+begin
+  v_payload := jsonb_set(coalesce(p_payload, '{}'::jsonb), '{quote}', 'true'::jsonb, true);
+  begin
+    v_sale_id := public.storevia_checkout(p_store_id, p_request_id, v_payload);
+    select jsonb_build_object(
+      'subtotal_paise', s.subtotal_paise,
+      'discount_paise', s.discount_paise,
+      'tax_paise', s.tax_paise,
+      'round_off_paise', s.round_off_paise,
+      'total_paise', s.total_paise,
+      'sold_against_negative_stock', exists (
+        select 1 from public."stock_movements" sm
+        where sm.store_id = p_store_id and sm.ref_type = 'SALE' and sm.ref_id = v_sale_id and sm.batch_id is null
+      )
+    ) into quote
+    from public."sales" s where s.store_id = p_store_id and s.id = v_sale_id;
+    raise exception using errcode = 'PZ001', message = 'quote complete', detail = quote::text;
+  exception when sqlstate 'PZ001' then
+    get stacked diagnostics error_detail = pg_exception_detail;
+    return error_detail::jsonb;
+  end;
+end;
+$$;
+
+revoke all on function public.storevia_quote_sale(text,text,jsonb) from public, anon, authenticated;
+grant execute on function public.storevia_quote_sale(text,text,jsonb) to authenticated;
+
+notify pgrst, 'reload schema';
+
+-- Included migration: 20261105001000_fix_cloud_sale_quote_simulation.sql
+create or replace function public.storevia_quote_sale(
+  p_store_id text,
+  p_request_id text,
+  p_payload jsonb
+) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  v_sale_id text;
+  v_payload jsonb;
+  quote jsonb;
+  error_detail text;
+begin
+  v_payload := jsonb_set(coalesce(p_payload, '{}'::jsonb), '{quote}', 'true'::jsonb, true);
+  begin
+    v_sale_id := public.storevia_checkout(p_store_id, p_request_id, v_payload);
+    select jsonb_build_object(
+      'subtotal_paise', s.subtotal_paise,
+      'discount_paise', s.discount_paise,
+      'tax_paise', s.tax_paise,
+      'round_off_paise', s.round_off_paise,
+      'total_paise', s.total_paise,
+      'sold_against_negative_stock', exists (
+        select 1 from public."stock_movements" sm
+        where sm.store_id = p_store_id and sm.ref_type = 'SALE' and sm.ref_id = v_sale_id and sm.batch_id is null
+      )
+    ) into quote
+    from public."sales" s where s.store_id = p_store_id and s.id = v_sale_id;
+    raise exception using errcode = 'PZ001', message = 'quote complete', detail = quote::text;
+  exception when sqlstate 'PZ001' then
+    get stacked diagnostics error_detail = pg_exception_detail;
+    return error_detail::jsonb;
+  end;
+end;
+$$;
+
+revoke all on function public.storevia_quote_sale(text,text,jsonb) from public, anon, authenticated;
+grant execute on function public.storevia_quote_sale(text,text,jsonb) to authenticated;
+
+notify pgrst, 'reload schema';
+
+-- Included migration: 20261105001100_fix_cloud_checkout_variable_ambiguity.sql
+-- Recreate checkout with explicit PL/pgSQL variable precedence for sale_id.
+create or replace function public.storevia_checkout(
+  p_store_id text,
+  p_request_id text,
+  p_payload jsonb
+) returns text
+language plpgsql security definer set search_path = public as $$
+#variable_conflict use_variable
+declare
+  receipt public.storevia_transaction_receipts%rowtype;
+  shop public."store"%rowtype;
+  branch text;
+  sale_id text := gen_random_uuid()::text;
+  invoice_no text;
+  customer_id text := nullif(p_payload->>'customer_id', '');
+  created_at_ms bigint := coalesce((p_payload->>'created_at')::bigint, (extract(epoch from clock_timestamp()) * 1000)::bigint);
+  items jsonb := coalesce(p_payload->'items', '[]'::jsonb);
+  payments jsonb := coalesce(p_payload->'payments', '[]'::jsonb);
+  item jsonb;
+  pay jsonb;
+  product_row public."products"%rowtype;
+  batch_row public."batches"%rowtype;
+  line_id text;
+  qty bigint;
+  remaining bigint;
+  batch_take bigint;
+  gross bigint;
+  line_discount bigint;
+  bill_discount bigint := coalesce((p_payload->>'bill_discount_paise')::bigint, 0);
+  net_total bigint := 0;
+  net_line bigint;
+  share bigint;
+  share_left bigint := 0;
+  gross_left bigint;
+  discount_left bigint;
+  alloc_gross bigint;
+  alloc_discount bigint;
+  taxable bigint;
+  tax bigint;
+  cgst bigint;
+  sgst bigint;
+  igst bigint;
+  line_total bigint;
+  line_sum bigint := 0;
+  subtotal bigint := 0;
+  discount_total bigint := 0;
+  tax_total bigint := 0;
+  total bigint;
+  round_off bigint;
+  paid bigint := 0;
+  credit bigint;
+  rate numeric;
+  inter_state boolean := coalesce((p_payload->>'inter_state')::boolean, false);
+  allow_negative boolean;
+  preferred text;
+  allocated_batch text;
+  cost bigint;
+  item_index integer := 0;
+  item_count integer := jsonb_array_length(items);
+  movement_id text;
+  serial_row record;
+  needed_serials bigint;
+  serial_count bigint;
+  actor_role text;
+begin
+  if auth.uid() is null or not public.can_write(p_store_id, array['OWNER','MANAGER','CASHIER']) then
+    raise exception 'cloud sale write access required';
+  end if;
+  if p_request_id is null or btrim(p_request_id) = '' then raise exception 'request id is required'; end if;
+  select role into actor_role from public.store_members where store_id = p_store_id and user_id = auth.uid();
+
+  select * into receipt from public.storevia_transaction_receipts
+    where store_id = p_store_id and request_id = p_request_id;
+  if found then
+    if receipt.operation <> 'CHECKOUT' then raise exception 'request id was already used for another operation'; end if;
+    return receipt.result_id;
+  end if;
+  if jsonb_typeof(items) <> 'array' or jsonb_array_length(items) = 0 then raise exception 'cart is empty'; end if;
+  if jsonb_typeof(payments) <> 'array' then raise exception 'payments must be an array'; end if;
+
+  select * into shop from public."store" where store_id = p_store_id for update;
+  if not found then raise exception 'cloud store settings are missing'; end if;
+  select id into branch from public."branches"
+    where store_id = p_store_id and deleted_at is null and is_active = 1
+    order by created_at, name limit 1;
+  branch := coalesce(branch, p_store_id);
+  allow_negative := shop.allow_negative_stock <> 0;
+
+  for item in select value from jsonb_array_elements(items) loop
+    qty := (item->>'qty_milli')::bigint;
+    if qty <= 0 then raise exception 'quantity must be positive'; end if;
+    select * into product_row from public."products"
+      where store_id = p_store_id and id = item->>'product_id'
+        and deleted_at is null and is_active = 1;
+    if not found then raise exception 'product is unavailable'; end if;
+    if (item->>'unit_price_paise')::bigint < 0 then raise exception 'unit price must not be negative'; end if;
+    if (item->>'unit_price_paise')::bigint is distinct from product_row.sell_price_paise and actor_role not in ('OWNER','MANAGER') then
+      raise exception 'price override requires manager approval';
+    end if;
+    if coalesce((item->>'discount_paise')::bigint, 0) > 0 and actor_role not in ('OWNER','MANAGER') then
+      raise exception 'discount requires manager approval';
+    end if;
+    if nullif(item->>'preferred_batch_id', '') is not null and actor_role not in ('OWNER','MANAGER') then
+      raise exception 'batch override requires manager approval';
+    end if;
+    if exists (select 1 from public."recipe_components" rc where rc.store_id = p_store_id
+        and rc.recipe_product_id = product_row.id and rc.deleted_at is null) then
+      raise exception 'cloud checkout for recipe products is not supported by this transaction version';
+    end if;
+    if product_row.serial_tracked <> 0 and qty % 1000 <> 0 then raise exception 'serial-tracked products require whole units'; end if;
+    gross := public.storevia_round_half_up((item->>'unit_price_paise')::numeric * qty / 1000);
+    line_discount := coalesce((item->>'discount_paise')::bigint, 0);
+    if line_discount < 0 or line_discount > gross then raise exception 'invalid line discount'; end if;
+    net_total := net_total + gross - line_discount;
+  end loop;
+  if bill_discount < 0 or bill_discount > net_total then raise exception 'invalid bill discount'; end if;
+  if bill_discount > 0 and actor_role not in ('OWNER','MANAGER') then raise exception 'discount requires manager approval'; end if;
+
+  for pay in select value from jsonb_array_elements(payments) loop
+    if (pay->>'amount_paise')::bigint <= 0 or
+       coalesce(pay->>'method', '') not in ('CASH','UPI','CARD','OTHER') then
+      raise exception 'invalid payment';
+    end if;
+    paid := paid + (pay->>'amount_paise')::bigint;
+  end loop;
+
+  invoice_no := shop.invoice_prefix || '-' || lpad(shop.next_invoice_no::text, 5, '0');
+  update public."store" set next_invoice_no = next_invoice_no + 1 where store_id = p_store_id;
+  insert into public."sales" (
+    id, invoice_no, branch_id, customer_id, status, inter_state, subtotal_paise, discount_paise,
+    tax_paise, round_off_paise, total_paise, paid_paise, returned_paise, created_at, store_id
+  ) values (sale_id, invoice_no, branch, customer_id, 'COMPLETED', inter_state::int, 0,
+    0, 0, 0, 0, 0, 0, created_at_ms, p_store_id);
+
+  -- Allocate discounts and FEFO stock under row locks; every write below shares this RPC transaction.
+  for item in select value from jsonb_array_elements(items) loop
+    item_index := item_index + 1;
+    qty := (item->>'qty_milli')::bigint;
+    select * into product_row from public."products"
+      where store_id = p_store_id and id = item->>'product_id' and deleted_at is null and is_active = 1;
+    gross := public.storevia_round_half_up((item->>'unit_price_paise')::numeric * qty / 1000);
+    line_discount := coalesce((item->>'discount_paise')::bigint, 0);
+    net_line := gross - line_discount;
+    if item_index = item_count then
+      share := bill_discount - share_left;
+    else
+      share := public.storevia_round_half_up(bill_discount::numeric * net_line / nullif(net_total, 0));
+      share_left := coalesce(share_left, 0) + share;
+    end if;
+    line_discount := line_discount + share;
+    preferred := nullif(item->>'preferred_batch_id', '');
+    if preferred is not null then
+      select * into batch_row from public."batches"
+        where store_id = p_store_id and id = preferred and product_id = product_row.id
+          and branch_id = branch and deleted_at is null and qty_on_hand_milli > 0
+          and (expiry_date is null or expiry_date >= current_date::text)
+        for update;
+      if not found then raise exception 'selected batch is unavailable or expired'; end if;
+    end if;
+    remaining := qty;
+    gross_left := gross;
+    discount_left := line_discount;
+    for batch_row in
+      select * from public."batches"
+      where store_id = p_store_id and product_id = product_row.id and branch_id = branch
+        and deleted_at is null and qty_on_hand_milli > 0
+        and (expiry_date is null or expiry_date >= current_date::text)
+      order by case when id = preferred then 0 else 1 end,
+        expiry_date nulls last, received_at, id
+      for update
+    loop
+      exit when remaining = 0;
+      batch_take := least(remaining, batch_row.qty_on_hand_milli);
+      if preferred is not null and batch_row.id = preferred and batch_take < remaining then
+        -- Selected batch is preferred, not exclusive; continue to FEFO after it.
+        null;
+      end if;
+      alloc_gross := case when batch_take = remaining then gross_left
+        else public.storevia_round_half_up(gross::numeric * batch_take / qty) end;
+      alloc_discount := case when batch_take = remaining then discount_left
+        else public.storevia_round_half_up(line_discount::numeric * batch_take / qty) end;
+      rate := product_row.gst_rate_bp::numeric;
+      if product_row.tax_inclusive <> 0 then
+        taxable := public.storevia_round_half_up((alloc_gross - alloc_discount)::numeric * 10000 / (10000 + rate));
+        tax := alloc_gross - alloc_discount - taxable;
+      else
+        taxable := alloc_gross - alloc_discount;
+        tax := public.storevia_round_half_up(taxable::numeric * rate / 10000);
+      end if;
+      if inter_state then
+        cgst := 0; sgst := 0; igst := tax;
+      else
+        cgst := public.storevia_round_half_up(tax::numeric / 2);
+        sgst := tax - cgst; igst := 0;
+      end if;
+      line_total := taxable + tax;
+      line_id := gen_random_uuid()::text;
+      insert into public."sale_lines" (
+        id, sale_id, product_id, batch_id, name_snapshot, hsn_snapshot, qty_milli,
+        unit_price_paise, discount_paise, gst_rate_bp, tax_inclusive, taxable_value_paise,
+        cgst_paise, sgst_paise, igst_paise, line_total_paise, cost_snapshot_paise,
+        returned_qty_milli, returned_amount_paise, store_id
+      ) values (
+        line_id, sale_id, product_row.id, batch_row.id, product_row.name, product_row.hsn_code, batch_take,
+        (item->>'unit_price_paise')::bigint, alloc_discount, product_row.gst_rate_bp,
+        product_row.tax_inclusive, taxable, cgst, sgst, igst, line_total, batch_row.cost_paise,
+        0, 0, p_store_id
+      );
+      update public."batches" set qty_on_hand_milli = qty_on_hand_milli - batch_take,
+        updated_at = created_at_ms where store_id = p_store_id and id = batch_row.id;
+      movement_id := gen_random_uuid()::text;
+      insert into public."stock_movements" (
+        id, product_id, branch_id, batch_id, type, qty_milli, unit_cost_paise, ref_type, ref_id, created_at, store_id
+      ) values (movement_id, product_row.id, branch, batch_row.id, 'SALE', -batch_take,
+        batch_row.cost_paise, 'SALE', sale_id, created_at_ms, p_store_id);
+      if product_row.serial_tracked <> 0 then
+        needed_serials := batch_take / 1000;
+        select count(*) into serial_count from public."serial_numbers"
+          where store_id = p_store_id and product_id = product_row.id and batch_id = batch_row.id
+            and status = 'AVAILABLE' and deleted_at is null;
+        if serial_count < needed_serials then raise exception 'serial numbers are no longer available'; end if;
+        for serial_row in select id from public."serial_numbers"
+          where store_id = p_store_id and product_id = product_row.id and batch_id = batch_row.id
+            and status = 'AVAILABLE' and deleted_at is null order by serial_number limit needed_serials
+          for update
+        loop
+          update public."serial_numbers" set status = 'SOLD', sale_line_id = line_id, updated_at = created_at_ms
+            where store_id = p_store_id and id = serial_row.id;
+        end loop;
+      end if;
+      gross_left := gross_left - alloc_gross;
+      discount_left := discount_left - alloc_discount;
+      remaining := remaining - batch_take;
+    end loop;
+    if remaining > 0 then
+      if not allow_negative or product_row.serial_tracked <> 0 then raise exception 'insufficient stock'; end if;
+      alloc_gross := gross_left;
+      alloc_discount := discount_left;
+      rate := product_row.gst_rate_bp::numeric;
+      if product_row.tax_inclusive <> 0 then
+        taxable := public.storevia_round_half_up((alloc_gross - alloc_discount)::numeric * 10000 / (10000 + rate));
+        tax := alloc_gross - alloc_discount - taxable;
+      else
+        taxable := alloc_gross - alloc_discount;
+        tax := public.storevia_round_half_up(taxable::numeric * rate / 10000);
+      end if;
+      if inter_state then cgst := 0; sgst := 0; igst := tax;
+      else cgst := public.storevia_round_half_up(tax::numeric / 2); sgst := tax - cgst; igst := 0; end if;
+      line_total := taxable + tax;
+      insert into public."sale_lines" (
+        id, sale_id, product_id, batch_id, name_snapshot, hsn_snapshot, qty_milli,
+        unit_price_paise, discount_paise, gst_rate_bp, tax_inclusive, taxable_value_paise,
+        cgst_paise, sgst_paise, igst_paise, line_total_paise, cost_snapshot_paise,
+        returned_qty_milli, returned_amount_paise, store_id
+      ) values (
+        gen_random_uuid()::text, sale_id, product_row.id, null, product_row.name, product_row.hsn_code, remaining,
+        (item->>'unit_price_paise')::bigint, alloc_discount, product_row.gst_rate_bp,
+        product_row.tax_inclusive, taxable, cgst, sgst, igst, line_total, product_row.cost_paise,
+        0, 0, p_store_id
+      );
+      insert into public."stock_movements" (
+        id, product_id, branch_id, batch_id, type, qty_milli, unit_cost_paise, ref_type, ref_id, created_at, store_id
+      ) values (gen_random_uuid()::text, product_row.id, branch, null, 'SALE', -remaining,
+        product_row.cost_paise, 'SALE', sale_id, created_at_ms, p_store_id);
+    end if;
+  end loop;
+
+  select coalesce(sum(taxable_value_paise), 0), coalesce(sum(discount_paise), 0),
+    coalesce(sum(cgst_paise + sgst_paise + igst_paise), 0), coalesce(sum(line_total_paise), 0)
+    into subtotal, discount_total, tax_total, line_sum
+    from public."sale_lines" sl where sl.store_id = p_store_id and sl.sale_id = sale_id;
+  total := public.storevia_round_half_up(line_sum::numeric / 100) * 100;
+  round_off := total - line_sum;
+  if paid > total then raise exception 'payment exceeds bill total'; end if;
+  credit := total - paid;
+  if credit > 0 and customer_id is null and not coalesce((p_payload->>'quote')::boolean, false) then
+    raise exception 'choose a customer to sell on credit';
+  end if;
+  if credit > 0 and customer_id is not null and actor_role = 'CASHIER' then raise exception 'credit sale requires manager approval'; end if;
+  if customer_id is not null and not exists (select 1 from public."customers"
+    where store_id = p_store_id and id = customer_id and deleted_at is null and is_active = 1) then
+    raise exception 'customer is unavailable';
+  end if;
+  if credit > 0 and customer_id is not null and (select credit_limit_paise from public."customers"
+      where store_id = p_store_id and id = customer_id) is not null
+      and (select coalesce(sum(cl.amount_paise), 0) from public."customer_ledger" cl
+        where cl.store_id = p_store_id and cl.customer_id = customer_id) + credit >
+      (select credit_limit_paise from public."customers" where store_id = p_store_id and id = customer_id) then
+    raise exception 'credit limit exceeded';
+  end if;
+
+  update public."sales" set subtotal_paise = subtotal, discount_paise = discount_total,
+    tax_paise = tax_total, round_off_paise = round_off, total_paise = total, paid_paise = paid
+    where store_id = p_store_id and id = sale_id;
+  -- Sale lines were inserted first so each line and stock event is covered by this transaction.
+  for pay in select value from jsonb_array_elements(payments) loop
+    insert into public."payments" (id, sale_id, customer_id, method, amount_paise, reference, created_at, store_id)
+    values (gen_random_uuid()::text, sale_id, customer_id, pay->>'method',
+      (pay->>'amount_paise')::bigint, nullif(pay->>'reference', ''), created_at_ms, p_store_id);
+  end loop;
+  if credit > 0 and customer_id is not null then
+    insert into public."customer_ledger" (id, customer_id, type, amount_paise, ref_type, ref_id, created_at, store_id)
+    values (gen_random_uuid()::text, customer_id, 'SALE_ON_CREDIT', credit, 'SALE', sale_id, created_at_ms, p_store_id);
+  end if;
+  insert into public.storevia_transaction_receipts (store_id, request_id, operation, result_id)
+    values (p_store_id, p_request_id, 'CHECKOUT', sale_id);
+  return sale_id;
+end;
+$$;
+
+-- Included migration: 20261105001200_require_pro_for_cloud_backups.sql
+create or replace function public.has_active_pro(sid text) returns boolean
+language sql stable security definer set search_path = public as $$
+  select public.is_member(sid) and exists (
+    select 1
+    from public.subscriptions s
+    where s.store_id = sid
+      and s.plan = 'pro'
+      and s.status = 'active'
+      and s.expires_at > now()
+  );
+$$;
+
+revoke all on function public.has_active_pro(text) from public, anon;
+grant execute on function public.has_active_pro(text) to authenticated;
+
+do $$
+begin
+  if to_regprocedure('public.storevia_import_products(text,jsonb,text,text)') is not null
+     and to_regprocedure('public.storevia_import_products_unchecked(text,jsonb,text,text)') is null then
+    alter function public.storevia_import_products(text,jsonb,text,text)
+      rename to storevia_import_products_unchecked;
+  end if;
+end;
+$$;
+
+revoke all on function public.storevia_import_products_unchecked(text,jsonb,text,text)
+  from public, anon, authenticated;
+
+create or replace function public.storevia_import_products(
+  p_store_id text,
+  p_rows jsonb,
+  p_policy text,
+  p_branch_id text default null
+) returns jsonb
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+begin
+  if not public.has_active_pro(p_store_id) then
+    raise exception 'Cloud product import requires an active Pro subscription.';
+  end if;
+
+  return public.storevia_import_products_unchecked(p_store_id, p_rows, p_policy, p_branch_id);
+end;
+$$;
+
+revoke all on function public.storevia_import_products(text,jsonb,text,text) from public, anon;
+grant execute on function public.storevia_import_products(text,jsonb,text,text) to authenticated;
+
+drop policy if exists "store members read backups" on storage.objects;
+create policy "store members read backups" on storage.objects
+for select using (
+  bucket_id = 'storevia-backups'
+  and public.has_active_pro((storage.foldername(name))[1])
+);
+
+drop policy if exists "store managers upload backups" on storage.objects;
+create policy "store managers upload backups" on storage.objects
+for insert with check (
+  bucket_id = 'storevia-backups'
+  and public.has_active_pro((storage.foldername(name))[1])
+  and public.can_write((storage.foldername(name))[1], array['OWNER','MANAGER'])
+);
+
+drop policy if exists "store managers update backups" on storage.objects;
+create policy "store managers update backups" on storage.objects
+for update using (
+  bucket_id = 'storevia-backups'
+  and public.has_active_pro((storage.foldername(name))[1])
+  and public.can_write((storage.foldername(name))[1], array['OWNER','MANAGER'])
+) with check (
+  bucket_id = 'storevia-backups'
+  and public.has_active_pro((storage.foldername(name))[1])
+  and public.can_write((storage.foldername(name))[1], array['OWNER','MANAGER'])
+);
+
+-- Included migration: 20261105001300_platform_admin_data_deletion.sql
+create or replace function public.platform_admin_deletion_scope(
+  p_target_kind text,
+  p_target_id text
+) returns jsonb
+language plpgsql
+security definer
+set search_path = public, auth, pg_temp
+as $$
+declare
+  v_user_ids uuid[] := array[]::uuid[];
+  v_store_ids text[] := array[]::text[];
+  v_next_user_ids uuid[];
+  v_next_store_ids text[];
+  v_target_user_id uuid;
+  v_target_name text;
+  v_confirmation_text text;
+  v_users jsonb;
+  v_stores jsonb;
+  v_row_counts jsonb := '{}'::jsonb;
+  v_total_rows bigint := 0;
+  v_row_count bigint;
+  v_table text;
+begin
+  if p_target_kind = 'account' then
+    begin
+      v_target_user_id := p_target_id::uuid;
+    exception when invalid_text_representation then
+      raise exception 'Invalid account id.';
+    end;
+    select coalesce(u.email, v_target_user_id::text)
+      into v_target_name
+      from auth.users u
+      where u.id = v_target_user_id;
+    if not found then raise exception 'Cloud account not found.'; end if;
+    v_user_ids := array[v_target_user_id];
+    v_confirmation_text := v_target_name;
+  elsif p_target_kind = 'store' then
+    select coalesce(s.name, s.id)
+      into v_target_name
+      from public."store" s
+      where s.id = p_target_id;
+    if not found then raise exception 'Store not found.'; end if;
+    v_store_ids := array[p_target_id];
+    v_confirmation_text := v_target_name;
+  else
+    raise exception 'Deletion target must be an account or store.';
+  end if;
+
+  loop
+    select coalesce(array_agg(x.store_id order by x.store_id), array[]::text[])
+      into v_next_store_ids
+      from (
+        select unnest(v_store_ids) as store_id
+        union
+        select m.store_id
+          from public.store_members m
+          where m.user_id = any(v_user_ids)
+      ) x;
+
+    select coalesce(array_agg(x.user_id order by x.user_id), array[]::uuid[])
+      into v_next_user_ids
+      from (
+        select unnest(v_user_ids) as user_id
+        union
+        select m.user_id
+          from public.store_members m
+          where m.store_id = any(v_next_store_ids)
+      ) x;
+
+    exit when cardinality(v_next_user_ids) = cardinality(v_user_ids)
+      and cardinality(v_next_store_ids) = cardinality(v_store_ids);
+    v_user_ids := v_next_user_ids;
+    v_store_ids := v_next_store_ids;
+  end loop;
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+      'user_id', u.id,
+      'email', coalesce(u.email, '')
+    ) order by u.email, u.id), '[]'::jsonb)
+    into v_users
+    from auth.users u
+    where u.id = any(v_user_ids);
+
+  select coalesce(jsonb_agg(jsonb_build_object(
+      'store_id', s.id,
+      'name', coalesce(nullif(s.name, ''), s.id)
+    ) order by s.name, s.id), '[]'::jsonb)
+    into v_stores
+    from public."store" s
+    where s.id = any(v_store_ids);
+
+  for v_table in
+    select distinct c.table_name
+      from information_schema.columns c
+      join information_schema.tables t
+        on t.table_schema = c.table_schema and t.table_name = c.table_name
+      where c.table_schema = 'public'
+        and c.column_name = 'store_id'
+        and t.table_type = 'BASE TABLE'
+  loop
+    execute format('select count(*) from public.%I where store_id = any($1)', v_table)
+      into v_row_count
+      using v_store_ids;
+    if v_row_count > 0 then
+      v_row_counts := v_row_counts || jsonb_build_object(v_table, v_row_count);
+      v_total_rows := v_total_rows + v_row_count;
+    end if;
+  end loop;
+
+  return jsonb_build_object(
+    'target_kind', p_target_kind,
+    'target_id', p_target_id,
+    'target_name', v_target_name,
+    'confirmation_text', v_confirmation_text,
+    'users', v_users,
+    'user_ids', to_jsonb(v_user_ids),
+    'stores', v_stores,
+    'store_ids', to_jsonb(v_store_ids),
+    'row_counts', v_row_counts,
+    'total_rows', v_total_rows
+  );
+end;
+$$;
+
+create or replace function public.platform_admin_deletion_preview(
+  p_target_kind text,
+  p_target_id text
+) returns jsonb
+language sql
+security definer
+set search_path = public, pg_temp
+as $$
+  select public.platform_admin_deletion_scope(p_target_kind, p_target_id);
+$$;
+
+create or replace function public.platform_admin_execute_deletion(
+  p_target_kind text,
+  p_target_id text,
+  p_confirmation_text text,
+  p_expected_user_ids uuid[],
+  p_expected_store_ids text[],
+  p_expected_row_counts jsonb
+) returns jsonb
+language plpgsql
+security definer
+set search_path = public, auth, pg_temp
+as $$
+declare
+  v_scope jsonb;
+  v_user_ids uuid[];
+  v_store_ids text[];
+  v_remaining text[];
+  v_table text;
+begin
+  v_scope := public.platform_admin_deletion_scope(p_target_kind, p_target_id);
+
+  if p_confirmation_text is distinct from v_scope->>'confirmation_text' then
+    raise exception 'Confirmation text does not match.';
+  end if;
+
+  select coalesce(array_agg(value::uuid order by value::uuid), array[]::uuid[])
+    into v_user_ids
+    from jsonb_array_elements_text(v_scope->'user_ids');
+  select coalesce(array_agg(value order by value), array[]::text[])
+    into v_store_ids
+    from jsonb_array_elements_text(v_scope->'store_ids');
+
+  if v_user_ids is distinct from coalesce(p_expected_user_ids, array[]::uuid[])
+     or v_store_ids is distinct from coalesce(p_expected_store_ids, array[]::text[])
+     or v_scope->'row_counts' is distinct from coalesce(p_expected_row_counts, '{}'::jsonb) then
+    raise exception 'Deletion scope changed. Refresh the impact preview and try again.';
+  end if;
+
+  update public.platform_payment_records
+    set recorded_by = null
+    where recorded_by = any(v_user_ids);
+  update public.platform_admin_audit
+    set actor_id = null
+    where actor_id = any(v_user_ids);
+
+  select array_agg(c.relname order by c.relname)
+    into v_remaining
+    from pg_class c
+    join pg_namespace n on n.oid = c.relnamespace
+    where n.nspname = 'public'
+      and c.relkind in ('r', 'p')
+      and exists (
+        select 1
+          from pg_attribute a
+          where a.attrelid = c.oid and a.attname = 'store_id' and not a.attisdropped
+      );
+  v_remaining := coalesce(v_remaining, array[]::text[]);
+
+  while cardinality(v_remaining) > 0 loop
+    select parent.relname
+      into v_table
+      from unnest(v_remaining) candidate(relname)
+      join pg_class parent on parent.relname = candidate.relname
+      join pg_namespace parent_ns on parent_ns.oid = parent.relnamespace and parent_ns.nspname = 'public'
+      where not exists (
+        select 1
+          from pg_constraint fk
+          join pg_class child on child.oid = fk.conrelid
+          join pg_namespace child_ns on child_ns.oid = child.relnamespace
+          where fk.contype = 'f'
+            and fk.confrelid = parent.oid
+            and child_ns.nspname = 'public'
+            and child.relname = any(v_remaining)
+            and child.oid <> parent.oid
+      )
+      order by parent.relname
+      limit 1;
+
+    if v_table is null then
+      raise exception 'Could not safely order store data deletion because of a circular relationship.';
+    end if;
+
+    execute format('delete from public.%I where store_id = any($1)', v_table)
+      using v_store_ids;
+    v_remaining := array_remove(v_remaining, v_table);
+    v_table := null;
+  end loop;
+
+  return jsonb_build_object(
+    'user_ids', to_jsonb(v_user_ids),
+    'store_ids', to_jsonb(v_store_ids)
+  );
+end;
+$$;
+
+revoke all on function public.platform_admin_deletion_scope(text, text) from public, anon, authenticated;
+revoke all on function public.platform_admin_deletion_preview(text, text) from public, anon, authenticated;
+revoke all on function public.platform_admin_execute_deletion(text, text, text, uuid[], text[], jsonb) from public, anon, authenticated;
+grant execute on function public.platform_admin_deletion_preview(text, text) to service_role;
+grant execute on function public.platform_admin_execute_deletion(text, text, text, uuid[], text[], jsonb) to service_role;
+
+-- Included migration: 20261105001400_cloud_sales_import.sql
+create table if not exists public.storevia_sales_import_receipts (
+  store_id text not null,
+  request_id text not null,
+  imported_count integer not null,
+  created_at timestamptz not null default now(),
+  primary key (store_id, request_id)
+);
+
+alter table public.storevia_sales_import_receipts enable row level security;
+revoke all on public.storevia_sales_import_receipts from public, anon, authenticated;
+
+create or replace function public.storevia_import_sales(
+  p_store_id text,
+  p_request_id text,
+  p_document jsonb
+) returns jsonb
+language plpgsql
+security definer
+set search_path = public, pg_temp
+as $$
+#variable_conflict use_variable
+declare
+  receipt public.storevia_sales_import_receipts%rowtype;
+  summary jsonb;
+  line_data jsonb;
+  payment jsonb;
+  sale_id text;
+  branch_id text;
+  customer_id text;
+  product_row public."products"%rowtype;
+  line_id text;
+  line_qty bigint;
+  line_quantity numeric;
+  line_weight bigint;
+  weight_total numeric;
+  cumulative_weight numeric;
+  allocated_total bigint;
+  previous_total bigint;
+  allocated_tax bigint;
+  previous_tax bigint;
+  allocated_discount bigint;
+  previous_discount bigint;
+  gross_total bigint;
+  summary_total bigint;
+  summary_tax bigint;
+  summary_discount bigint;
+  paid_total bigint;
+  created_at_ms bigint;
+  line_count integer;
+  imported_count integer := 0;
+  payment_rows jsonb;
+begin
+  if auth.uid() is null or not public.can_write(p_store_id, array['OWNER','MANAGER']) then
+    raise exception 'Owner or manager access is required to import sales.';
+  end if;
+  if not public.has_active_pro(p_store_id) then
+    raise exception 'Cloud sales import requires an active Pro subscription.';
+  end if;
+  if p_request_id is null or btrim(p_request_id) = '' then
+    raise exception 'A sales import request id is required.';
+  end if;
+  if jsonb_typeof(p_document) is distinct from 'object'
+     or jsonb_typeof(p_document->'summaries') is distinct from 'array'
+     or jsonb_typeof(p_document->'lines') is distinct from 'array'
+     or jsonb_array_length(p_document->'summaries') = 0
+     or jsonb_array_length(p_document->'lines') = 0 then
+    raise exception 'Sales import requires at least one summary and one line item.';
+  end if;
+  payment_rows := coalesce(p_document->'payments', '[]'::jsonb);
+  if jsonb_typeof(payment_rows) is distinct from 'array' then
+    raise exception 'Sales import payments must be an array.';
+  end if;
+  if exists (
+    select 1
+    from jsonb_array_elements(payment_rows) payment_row
+    where payment_row->>'bill_id' is null
+      or payment_row->>'bill_id' not in (
+        select summary_row->>'bill_id'
+        from jsonb_array_elements(p_document->'summaries') summary_row
+      )
+      or upper(coalesce(payment_row->>'method', '')) not in ('CASH', 'UPI', 'CARD', 'OTHER')
+      or coalesce((payment_row->>'amount_paise')::bigint, 0) <= 0
+  ) then
+    raise exception 'A payment row has an invalid bill, method, or amount.';
+  end if;
+
+  perform pg_advisory_xact_lock(hashtextextended(p_store_id, 0));
+  select * into receipt from public.storevia_sales_import_receipts
+    where store_id = p_store_id and request_id = p_request_id;
+  if found then
+    return jsonb_build_object('imported', receipt.imported_count);
+  end if;
+
+  select id into branch_id
+  from public."branches"
+  where store_id = p_store_id and deleted_at is null and is_active <> 0
+  order by created_at, name
+  limit 1;
+  if branch_id is null then raise exception 'Add an active branch before importing sales.'; end if;
+
+  for summary in select value from jsonb_array_elements(p_document->'summaries')
+  loop
+    if nullif(btrim(summary->>'bill_id'), '') is null then raise exception 'A bill ID is required.'; end if;
+    if exists (
+      select 1 from public."sales"
+      where store_id = p_store_id and invoice_no = summary->>'bill_id'
+    ) then raise exception 'Bill ID % already exists.', summary->>'bill_id'; end if;
+
+    if nullif(btrim(summary->>'branch_name'), '') is not null then
+      select id into branch_id
+      from public."branches"
+      where store_id = p_store_id and deleted_at is null
+        and lower(name) = lower(btrim(summary->>'branch_name'))
+      limit 1;
+      if branch_id is null then raise exception 'Branch % was not found.', summary->>'branch_name'; end if;
+    else
+      select id into branch_id
+      from public."branches"
+      where store_id = p_store_id and deleted_at is null and is_active <> 0
+      order by created_at, name
+      limit 1;
+    end if;
+
+    customer_id := null;
+    if nullif(btrim(summary->>'customer_name'), '') is not null then
+      select id into customer_id from public."customers"
+      where store_id = p_store_id and deleted_at is null
+        and lower(name) = lower(btrim(summary->>'customer_name'))
+      order by id limit 1;
+      if customer_id is null then raise exception 'Customer % was not found.', summary->>'customer_name'; end if;
+    end if;
+
+    summary_total := (summary->>'total_paise')::bigint;
+    summary_tax := coalesce((summary->>'tax_paise')::bigint, 0);
+    summary_discount := coalesce((summary->>'discount_paise')::bigint, 0);
+    created_at_ms := (summary->>'created_at')::bigint;
+    if summary_total < 0 or summary_tax < 0 or summary_tax > summary_total or summary_discount < 0 then
+      raise exception 'Bill % has inconsistent totals.', summary->>'bill_id';
+    end if;
+    if nullif(summary->>'payment_method', '') is not null
+       and upper(summary->>'payment_method') not in ('CASH', 'UPI', 'CARD', 'OTHER') then
+      raise exception 'Bill % has an invalid payment method.', summary->>'bill_id';
+    end if;
+    if coalesce((summary->>'is_credit')::boolean, false) and customer_id is null then
+      raise exception 'Credit sales require a customer.';
+    end if;
+
+    select coalesce(sum((p->>'amount_paise')::bigint), 0) into paid_total
+    from jsonb_array_elements(payment_rows) p
+    where p->>'bill_id' = summary->>'bill_id';
+    if paid_total = 0 and not coalesce((summary->>'is_credit')::boolean, false)
+       and nullif(summary->>'payment_method', '') is not null then
+      paid_total := summary_total;
+    end if;
+    if paid_total > summary_total then raise exception 'Payments exceed bill % total.', summary->>'bill_id'; end if;
+    if paid_total < summary_total and customer_id is null then
+      raise exception 'Unpaid sales require a customer.';
+    end if;
+
+    select count(*), coalesce(sum(
+      public.storevia_round_half_up((line->>'unit_price_paise')::numeric *
+        (case when unit.allow_decimal <> 0 then
+          public.storevia_round_half_up((line->>'quantity')::numeric * 1000)
+        else
+          public.storevia_round_half_up((line->>'quantity')::numeric) * 1000
+        end) / 1000)
+    ), 0)
+    into line_count, weight_total
+    from jsonb_array_elements(p_document->'lines') line
+    join public."products" product on product.store_id = p_store_id
+      and product.deleted_at is null
+      and ((nullif(line->>'sku', '') is not null and product.sku = line->>'sku')
+        or (nullif(line->>'sku', '') is null and lower(product.name) = lower(line->>'product_name')))
+    join public."units" unit on unit.store_id = p_store_id and unit.id = product.unit_id
+    where line->>'bill_id' = summary->>'bill_id';
+    if line_count = 0 then raise exception 'Bill % has no matching line items.', summary->>'bill_id'; end if;
+    if weight_total = 0 and summary_total > 0 then raise exception 'Bill % has no valid line value.', summary->>'bill_id'; end if;
+
+    sale_id := gen_random_uuid()::text;
+    insert into public."sales" (
+      id, invoice_no, branch_id, customer_id, status, inter_state, subtotal_paise,
+      discount_paise, tax_paise, round_off_paise, total_paise, paid_paise,
+      returned_paise, created_at, store_id
+    ) values (
+      sale_id, summary->>'bill_id', branch_id, customer_id, 'COMPLETED', 0,
+      summary_total - summary_tax, summary_discount, summary_tax, 0,
+      summary_total, paid_total, 0, created_at_ms, p_store_id
+    );
+
+    cumulative_weight := 0;
+    previous_total := 0;
+    previous_tax := 0;
+    previous_discount := 0;
+    for line_data in
+      select line.value
+      from jsonb_array_elements(p_document->'lines') with ordinality line
+      where line.value->>'bill_id' = summary->>'bill_id'
+      order by line.ordinality
+    loop
+      if nullif(line_data->>'sku', '') is not null then
+        select * into product_row from public."products"
+        where store_id = p_store_id and deleted_at is null and sku = line_data->>'sku'
+        order by id limit 1;
+      else
+        select * into product_row from public."products"
+        where store_id = p_store_id and deleted_at is null
+          and lower(name) = lower(line_data->>'product_name')
+        order by id limit 1;
+      end if;
+      if product_row.id is null then raise exception 'A product in bill % was not found.', summary->>'bill_id'; end if;
+
+      line_quantity := (line_data->>'quantity')::numeric;
+      if line_quantity <= 0 or line_quantity * 1000 <> trunc(line_quantity * 1000) then
+        raise exception 'Line quantity must be positive with at most three decimal places.';
+      end if;
+      if (line_data->>'unit_price_paise')::bigint < 0 then
+        raise exception 'Line unit price must not be negative.';
+      end if;
+      if not exists (
+        select 1 from public."units" where store_id = p_store_id
+          and id = product_row.unit_id and allow_decimal <> 0
+      ) and line_quantity <> trunc(line_quantity) then
+        raise exception 'This product unit does not allow fractional quantities.';
+      end if;
+      line_qty := (line_quantity * 1000)::bigint;
+      if line_qty <= 0 then raise exception 'Line quantity must be positive.'; end if;
+      line_weight := public.storevia_round_half_up((line_data->>'unit_price_paise')::numeric * line_qty / 1000);
+      cumulative_weight := cumulative_weight + line_weight;
+
+      if weight_total = 0 then
+        allocated_total := 0; allocated_tax := 0; allocated_discount := 0;
+      else
+        allocated_total := floor(summary_total * cumulative_weight / weight_total)::bigint - previous_total;
+        allocated_tax := floor(summary_tax * cumulative_weight / weight_total)::bigint - previous_tax;
+        allocated_discount := floor(summary_discount * cumulative_weight / weight_total)::bigint - previous_discount;
+      end if;
+      previous_total := previous_total + allocated_total;
+      previous_tax := previous_tax + allocated_tax;
+      previous_discount := previous_discount + allocated_discount;
+      line_id := gen_random_uuid()::text;
+      insert into public."sale_lines" (
+        id, sale_id, product_id, batch_id, name_snapshot, hsn_snapshot, qty_milli,
+        unit_price_paise, discount_paise, gst_rate_bp, tax_inclusive,
+        taxable_value_paise, cgst_paise, sgst_paise, igst_paise, line_total_paise,
+        cost_snapshot_paise, returned_qty_milli, returned_amount_paise, store_id
+      ) values (
+        line_id, sale_id, product_row.id, null, product_row.name, product_row.hsn_code,
+        line_qty, (line_data->>'unit_price_paise')::bigint, allocated_discount,
+        product_row.gst_rate_bp, product_row.tax_inclusive,
+        allocated_total - allocated_tax, floor(allocated_tax::numeric / 2)::bigint,
+        allocated_tax - floor(allocated_tax::numeric / 2)::bigint, 0,
+        allocated_total, product_row.cost_paise, 0, 0, p_store_id
+      );
+    end loop;
+
+    for payment in select value from jsonb_array_elements(payment_rows)
+      where value->>'bill_id' = summary->>'bill_id'
+    loop
+      insert into public."payments" (
+        id, sale_id, customer_id, method, amount_paise, reference, created_at, store_id
+      ) values (
+        gen_random_uuid()::text, sale_id, customer_id, payment->>'method',
+        (payment->>'amount_paise')::bigint, nullif(payment->>'reference', ''),
+        created_at_ms, p_store_id
+      );
+    end loop;
+    if paid_total = summary_total and not exists (
+      select 1 from jsonb_array_elements(payment_rows) p where p->>'bill_id' = summary->>'bill_id'
+    ) and nullif(summary->>'payment_method', '') is not null then
+      insert into public."payments" (
+        id, sale_id, customer_id, method, amount_paise, created_at, store_id
+      ) values (
+        gen_random_uuid()::text, sale_id, customer_id, summary->>'payment_method',
+        summary_total, created_at_ms, p_store_id
+      );
+    end if;
+    if summary_total > paid_total and customer_id is not null then
+      insert into public."customer_ledger" (
+        id, customer_id, type, amount_paise, ref_type, ref_id, created_at, store_id
+      ) values (
+        gen_random_uuid()::text, customer_id, 'SALE_ON_CREDIT',
+        summary_total - paid_total, 'SALE', sale_id, created_at_ms, p_store_id
+      );
+    end if;
+    imported_count := imported_count + 1;
+  end loop;
+
+  insert into public.storevia_sales_import_receipts(store_id, request_id, imported_count)
+  values (p_store_id, p_request_id, imported_count);
+  return jsonb_build_object('imported', imported_count);
+end;
+$$;
+
+revoke all on function public.storevia_import_sales(text, text, jsonb) from public, anon;
+grant execute on function public.storevia_import_sales(text, text, jsonb) to authenticated;
+
+-- Included migration: 20261110000100_rewarded_pro_access.sql
+create table if not exists public.ad_reward_nonces (
+  nonce text primary key,
+  store_id text not null,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  expires_at timestamptz not null,
+  used_at timestamptz,
+  created_at timestamptz not null default now()
+);
+
+create unique index if not exists ad_reward_nonces_pending_user_store_idx
+  on public.ad_reward_nonces (store_id, user_id)
+  where used_at is null;
+
+create table if not exists public.ad_reward_entitlements (
+  store_id text not null,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  expires_at timestamptz not null,
+  updated_at timestamptz not null default now(),
+  primary key (store_id, user_id)
+);
+
+create table if not exists public.ad_reward_events (
+  transaction_id text primary key,
+  nonce text not null unique references public.ad_reward_nonces(nonce),
+  store_id text not null,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  rewarded_at timestamptz not null default now(),
+  expires_at timestamptz not null
+);
+
+alter table public.ad_reward_nonces enable row level security;
+alter table public.ad_reward_entitlements enable row level security;
+alter table public.ad_reward_events enable row level security;
+
+revoke all on public.ad_reward_nonces, public.ad_reward_entitlements, public.ad_reward_events
+  from public, anon, authenticated;
+grant select on public.ad_reward_entitlements to authenticated;
+
+drop policy if exists "users read own rewarded access" on public.ad_reward_entitlements;
+create policy "users read own rewarded access" on public.ad_reward_entitlements
+  for select to authenticated
+  using (user_id = auth.uid() and public.is_member(store_id));
+
+create or replace function public.has_active_pro(sid text) returns boolean
+language sql stable security definer set search_path = public as $$
+  select public.is_member(sid) and (
+    exists (
+      select 1
+      from public.subscriptions s
+      where s.store_id = sid
+        and s.plan = 'pro'
+        and s.status = 'active'
+        and s.expires_at > now()
+    )
+    or exists (
+      select 1
+      from public.ad_reward_entitlements r
+      where r.store_id = sid
+        and r.user_id = auth.uid()
+        and r.expires_at > now()
+    )
+  );
+$$;
+
+revoke all on function public.has_active_pro(text) from public, anon;
+grant execute on function public.has_active_pro(text) to authenticated;
+
+create or replace function public.storevia_grant_ad_reward(
+  p_transaction_id text,
+  p_nonce text
+) returns timestamptz
+language plpgsql security definer set search_path = public as $$
+declare
+  reward_nonce public.ad_reward_nonces%rowtype;
+  next_expiry timestamptz;
+  prior_expiry timestamptz;
+begin
+  if btrim(p_transaction_id) = '' or btrim(p_nonce) = '' then
+    raise exception 'invalid rewarded-ad callback';
+  end if;
+
+  select expires_at into prior_expiry
+  from public.ad_reward_events
+  where transaction_id = p_transaction_id;
+  if found then
+    return prior_expiry;
+  end if;
+
+  select * into reward_nonce
+  from public.ad_reward_nonces
+  where nonce = p_nonce
+  for update;
+  if not found or reward_nonce.used_at is not null or reward_nonce.expires_at <= now() then
+    raise exception 'reward request is missing, expired, or already used';
+  end if;
+  if not exists (
+    select 1 from public.store_members
+    where store_id = reward_nonce.store_id and user_id = reward_nonce.user_id
+  ) then
+    raise exception 'rewarded user is no longer a store member';
+  end if;
+
+  select greatest(expires_at, now()) into prior_expiry
+  from public.ad_reward_entitlements
+  where store_id = reward_nonce.store_id and user_id = reward_nonce.user_id
+  for update;
+  next_expiry := coalesce(prior_expiry, now()) + interval '15 minutes';
+
+  insert into public.ad_reward_entitlements (store_id, user_id, expires_at, updated_at)
+  values (reward_nonce.store_id, reward_nonce.user_id, next_expiry, now())
+  on conflict (store_id, user_id) do update
+    set expires_at = excluded.expires_at, updated_at = excluded.updated_at;
+
+  insert into public.ad_reward_events (transaction_id, nonce, store_id, user_id, expires_at)
+  values (p_transaction_id, p_nonce, reward_nonce.store_id, reward_nonce.user_id, next_expiry);
+  update public.ad_reward_nonces set used_at = now() where nonce = p_nonce;
+
+  return next_expiry;
+end;
+$$;
+
+revoke all on function public.storevia_grant_ad_reward(text, text) from public, anon, authenticated;
+grant execute on function public.storevia_grant_ad_reward(text, text) to service_role;
 
 notify pgrst, 'reload schema';

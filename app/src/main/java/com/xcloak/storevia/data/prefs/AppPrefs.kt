@@ -10,6 +10,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import javax.inject.Inject
 import javax.inject.Singleton
 
+enum class StorageMode {
+    LOCAL,
+    CLOUD,
+}
+
 data class AppSettings(
     val alertsEnabled: Boolean = true,
     /** Warn about batches that expire within this many days. */
@@ -20,7 +25,8 @@ data class AppSettings(
     /** App relocks after being in the background this long. */
     val lockGraceSeconds: Int = 60,
     val onboardingDone: Boolean = false,
-    val localOnlyMode: Boolean = false,
+    val storageMode: StorageMode? = null,
+    val cloudSignupPending: Boolean = false,
     val cashierCanDiscount: Boolean = false,
     val cashierCanSellOnCredit: Boolean = false,
     val cashierCanOverrideBatch: Boolean = false,
@@ -32,6 +38,16 @@ data class AppSettings(
     val deviceSeries: String = "",
 )
 
+internal fun legacyStorageMode(
+    legacyMode: String?,
+    localOnlyMode: Boolean,
+    hasCloudStore: Boolean,
+): StorageMode? = when {
+    localOnlyMode || legacyMode == "OFFLINE" || legacyMode == "OFFLINE_PENDING" -> StorageMode.LOCAL
+    hasCloudStore || legacyMode == "CLOUD_PENDING" -> StorageMode.CLOUD
+    else -> null
+}
+
 /** Small settings store (SharedPreferences) exposed as a StateFlow so screens and workers share one source. */
 @Singleton
 class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
@@ -39,13 +55,16 @@ class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
     private val _settings = MutableStateFlow(read())
     val settings: StateFlow<AppSettings> = _settings.asStateFlow()
 
+    @Synchronized
     fun update(block: AppSettings.() -> AppSettings) {
-        val n = _settings.value.block()
-        sp.edit()
+        val previous = _settings.value
+        val n = previous.block()
+        val editor = sp.edit()
             .putBoolean("alerts", n.alertsEnabled).putInt("expiry_days", n.expiryWarnDays).putInt("alert_hour", n.alertHour)
             .putBoolean("lock", n.lockEnabled).putInt("lock_grace", n.lockGraceSeconds)
             .putBoolean("onboarding_done", n.onboardingDone)
-            .putBoolean("local_only_mode", n.localOnlyMode)
+            .putBoolean("cloud_signup_pending", n.cloudSignupPending)
+            .putString("storage_mode", n.storageMode?.name)
             .putBoolean("cashier_discount", n.cashierCanDiscount).putBoolean("cashier_credit", n.cashierCanSellOnCredit)
             .putBoolean("cashier_batch_override", n.cashierCanOverrideBatch)
             .putString("store_type", n.storeType.name)
@@ -53,7 +72,11 @@ class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
             .putString("cloud_store_id", n.cloudStoreId)
             .putString("cloud_role", n.cloudRole)
             .putString("device_series", n.deviceSeries)
-            .apply()
+        if (previous.storageMode != n.storageMode || previous.cloudStoreId != n.cloudStoreId) {
+            check(editor.commit()) { "Could not persist the selected storage mode or cloud store." }
+        } else {
+            editor.apply()
+        }
         _settings.value = n
     }
 
@@ -71,22 +94,40 @@ class AppPrefs @Inject constructor(@ApplicationContext context: Context) {
         return raw.split("\u0001").takeIf { it.size == 4 }
     }
 
-    private fun read() = AppSettings(
+    private fun read(): AppSettings {
+        val cloudStoreId = sp.getString("cloud_store_id", null)
+        val storedMode = sp.getString("storage_mode", null)
+        val mode = storedMode?.let { value ->
+            runCatching { StorageMode.valueOf(value) }.getOrNull()
+        } ?: legacyStorageMode(
+            legacyMode = sp.getString("store_mode", null),
+            localOnlyMode = sp.getBoolean("local_only_mode", false),
+            hasCloudStore = cloudStoreId != null,
+        )
+        if (storedMode != mode?.name) {
+            check(sp.edit().putString("storage_mode", mode?.name).commit()) {
+                "Could not persist the selected storage mode."
+            }
+        }
+        return AppSettings(
         alertsEnabled = sp.getBoolean("alerts", true),
         expiryWarnDays = sp.getInt("expiry_days", 30),
         alertHour = sp.getInt("alert_hour", 9),
         lockEnabled = sp.getBoolean("lock", false),
         lockGraceSeconds = sp.getInt("lock_grace", 60),
         onboardingDone = sp.getBoolean("onboarding_done", false),
-        localOnlyMode = sp.getBoolean("local_only_mode", false),
+        cloudSignupPending = sp.getBoolean("cloud_signup_pending", false),
+        storageMode = mode,
         cashierCanDiscount = sp.getBoolean("cashier_discount", false),
         cashierCanSellOnCredit = sp.getBoolean("cashier_credit", false),
         cashierCanOverrideBatch = sp.getBoolean("cashier_batch_override", false),
         storeType = StoreType.fromName(sp.getString("store_type", StoreType.GENERAL.name)),
         themeMode = runCatching { ThemeMode.valueOf(sp.getString("theme_mode", ThemeMode.SYSTEM.name) ?: ThemeMode.SYSTEM.name) }
             .getOrDefault(ThemeMode.SYSTEM),
-        cloudStoreId = sp.getString("cloud_store_id", null),
+        cloudStoreId = cloudStoreId,
         cloudRole = sp.getString("cloud_role", null),
         deviceSeries = sp.getString("device_series", "") ?: "",
-    )
+        )
+    }
+
 }

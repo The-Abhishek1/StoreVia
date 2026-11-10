@@ -13,6 +13,9 @@ import com.xcloak.storevia.core.database.entity.SaleLineEntity
 import com.xcloak.storevia.core.database.entity.StoreEntity
 import com.xcloak.storevia.core.database.entity.SerialNumberEntity
 import com.xcloak.storevia.domain.sale.CancelSaleUseCase
+import com.xcloak.storevia.data.cloud.CloudSalesInventoryRepository
+import com.xcloak.storevia.data.prefs.AppPrefs
+import com.xcloak.storevia.data.prefs.StorageModeRouter
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
@@ -43,19 +46,35 @@ class SaleDetailViewModel @Inject constructor(
     storeDao: StoreDao,
     customerDao: CustomerDao,
     private val cancelSale: CancelSaleUseCase,
+    cloudSales: CloudSalesInventoryRepository,
+    prefs: AppPrefs,
 ) : ViewModel() {
     private val id: String = checkNotNull(handle["id"])
 
-    val ui: StateFlow<ReceiptUi?> = combine(
-        saleDao.observeById(id), saleDao.observeLines(id), saleDao.observePayments(id), storeDao.observe(),
-        serialNumberDao.observeForSale(id),
-    ) { sale, lines, payments, store, serialNumbers ->
-        if (sale == null || store == null) null
-        else ReceiptUi(
-            store, sale, lines, payments, sale.customerId?.let { customerDao.getById(it)?.name },
-            serialNumbers,
-        )
-    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
+    val ui: StateFlow<ReceiptUi?> = StorageModeRouter.observe(
+        prefs.settings.map { it.storageMode },
+        local = {
+            combine(
+                saleDao.observeById(id), saleDao.observeLines(id), saleDao.observePayments(id), storeDao.observe(),
+                serialNumberDao.observeForSale(id),
+            ) { sale, lines, payments, store, serialNumbers ->
+                if (sale == null || store == null) null
+                else ReceiptUi(
+                    store, sale, lines, payments, sale.customerId?.let { customerDao.getById(it)?.name },
+                    serialNumbers,
+                )
+            }
+        },
+        cloud = {
+            cloudSales.observeReceipt(id).map { snapshot ->
+                snapshot?.let {
+                    ReceiptUi(
+                        it.store, it.sale, it.lines, it.payments, it.customerName, it.serialNumbers,
+                    )
+                }
+            }
+        },
+    ).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     fun cancel(reason: String?) {
         viewModelScope.launch { runCatching { cancelSale(id, reason) } }

@@ -1,11 +1,13 @@
 package com.xcloak.storevia.core.ui
 
+import android.app.Activity
 import android.net.Uri
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -15,6 +17,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavType
@@ -25,6 +28,8 @@ import androidx.navigation.compose.rememberNavController
 import com.xcloak.storevia.core.access.Permission
 import androidx.navigation.navArgument
 import com.xcloak.storevia.R
+import com.xcloak.storevia.data.cloud.CloudSyncStatus
+import com.xcloak.storevia.data.ads.AdsManager
 import com.xcloak.storevia.feature.customers.CustomerDetailScreen
 import com.xcloak.storevia.feature.customers.CustomersScreen
 import com.xcloak.storevia.feature.cloud.CloudAccountScreen
@@ -112,10 +117,21 @@ private enum class Tab(val route: String, val label: Int, val icon: ImageVector)
 
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
-fun StoreviaNavHost(localOnly: Boolean = false, onExitLocalOnly: () -> Unit = {}) {
+fun StoreviaNavHost(
+    localOnly: Boolean = false,
+    cloudSyncStatus: CloudSyncStatus = CloudSyncStatus.IDLE,
+    onRetryCloudSync: () -> Unit = {},
+    onExitLocalOnly: () -> Unit = {},
+    adsManager: AdsManager,
+    showAds: Boolean,
+    onAdsEligibilityChanged: (Boolean) -> Unit,
+    privacyOptionsRequired: Boolean,
+    onPrivacyOptions: () -> Unit,
+) {
     val nav = rememberNavController()
     val current by nav.currentBackStackEntryAsState()
     val route = current?.destination?.route
+    val activity = LocalContext.current as? Activity
     val actor = LocalActor.current
     val tabs = Tab.entries.filter { it != Tab.Reports || actor.can(Permission.VIEW_REPORTS) }
     val showBottomBar = tabs.any { it.route == route }
@@ -124,6 +140,12 @@ fun StoreviaNavHost(localOnly: Boolean = false, onExitLocalOnly: () -> Unit = {}
     fun openScanner(onResult: (String) -> Unit) {
         scannerResult = onResult
         nav.navigate(Routes.SCANNER)
+    }
+
+    LaunchedEffect(route, showAds, activity) {
+        if (route == Routes.MORE && showAds && activity != null) {
+            adsManager.maybeShowInterstitial(activity)
+        }
     }
 
     Scaffold(
@@ -150,6 +172,33 @@ fun StoreviaNavHost(localOnly: Boolean = false, onExitLocalOnly: () -> Unit = {}
                             )
                             TextButton(onClick = { nav.navigate(Routes.CLOUD_ACCOUNT) }) { Text(stringResource(R.string.cloud_connect)) }
                             TextButton(onClick = onExitLocalOnly) { Text(stringResource(R.string.entry_exit_offline)) }
+                        }
+                    }
+                } else if (cloudSyncStatus != CloudSyncStatus.IDLE) {
+                    Surface(
+                        color = if (cloudSyncStatus == CloudSyncStatus.FAILED)
+                            MaterialTheme.colorScheme.errorContainer
+                        else MaterialTheme.colorScheme.secondaryContainer,
+                        modifier = Modifier.fillMaxWidth().then(if (showBottomBar) Modifier else Modifier.statusBarsPadding()),
+                    ) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                stringResource(
+                                    if (cloudSyncStatus == CloudSyncStatus.FAILED) R.string.cloud_sync_pending_warning
+                                    else R.string.cloud_sync_in_progress,
+                                ),
+                                Modifier.weight(1f),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = if (cloudSyncStatus == CloudSyncStatus.FAILED)
+                                    MaterialTheme.colorScheme.onErrorContainer
+                                else MaterialTheme.colorScheme.onSecondaryContainer,
+                            )
+                            if (cloudSyncStatus == CloudSyncStatus.FAILED) {
+                                TextButton(onClick = onRetryCloudSync) { Text(stringResource(R.string.retry)) }
+                            }
                         }
                     }
                 }
@@ -189,6 +238,7 @@ fun StoreviaNavHost(localOnly: Boolean = false, onExitLocalOnly: () -> Unit = {}
                     onReorder = { nav.navigate(Routes.REORDER) },
                     onSetupStore = { nav.navigate(Routes.STORE_SETTINGS) },
                     onOnboarding = { nav.navigate(Routes.ONBOARDING) },
+                    onAdsEligibilityChanged = onAdsEligibilityChanged,
                 )
             }
 
@@ -304,6 +354,8 @@ fun StoreviaNavHost(localOnly: Boolean = false, onExitLocalOnly: () -> Unit = {}
                     onStaff = { nav.navigate(Routes.STAFF) },
                     onAudit = { nav.navigate(Routes.AUDIT) },
                     onCloudAccount = { nav.navigate(Routes.CLOUD_ACCOUNT) },
+                    privacyOptionsRequired = privacyOptionsRequired,
+                    onPrivacyOptions = onPrivacyOptions,
                 )
             }
 

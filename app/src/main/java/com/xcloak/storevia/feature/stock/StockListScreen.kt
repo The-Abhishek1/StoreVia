@@ -42,6 +42,7 @@ fun StockListScreen(
     val rows by vm.rows.collectAsStateWithLifecycle()
     val query by vm.query.collectAsStateWithLifecycle()
     val categories by vm.categories.collectAsStateWithLifecycle()
+    val catalogError by vm.catalogError.collectAsStateWithLifecycle()
     val selectedCategory by vm.category.collectAsStateWithLifecycle()
     val activeBranchName by vm.activeBranchName.collectAsStateWithLifecycle()
     var stockFilter by remember { mutableStateOf(StockFilter.ALL) }
@@ -118,6 +119,11 @@ fun StockListScreen(
             when {
                 list == null -> LoadingState(Modifier.weight(1f).fillMaxWidth())
                 list.isEmpty() && rows.orEmpty().isNotEmpty() -> FilterEmptyState { stockFilter = StockFilter.ALL }
+                list.isEmpty() && catalogError != null -> Text(
+                    catalogError.orEmpty(),
+                    Modifier.weight(1f).fillMaxWidth().padding(24.dp),
+                    color = MaterialTheme.colorScheme.error,
+                )
                 list.isEmpty() -> EmptyState(query.trim(), can(Permission.MANAGE_PRODUCTS), addProductWithBarcode)
                 else -> LazyColumn(
                     contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 112.dp),

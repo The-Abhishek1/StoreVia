@@ -15,14 +15,32 @@ sealed interface SaveResult {
     data object InvalidVariantParent : SaveResult
 }
 
-class ProductRepository @Inject constructor(
+class ProductRepository private constructor(
     private val db: StorviaDatabase,
     private val productDao: ProductDao,
+    private val catalog: ProductCatalogRepository?,
     private val access: Access = OwnerAccess,
     private val audit: AuditSink = NoAudit,
+    @Suppress("UNUSED_PARAMETER") localTestConstruction: Boolean,
 ) {
-    suspend fun save(product: ProductEntity, barcode: String?, isNew: Boolean): SaveResult =
-        db.withTransaction {
+    @Inject constructor(
+        db: StorviaDatabase,
+        productDao: ProductDao,
+        catalog: ProductCatalogRepository,
+        access: Access,
+        audit: AuditSink,
+    ) : this(db, productDao, catalog, access, audit, false)
+
+    constructor(db: StorviaDatabase, productDao: ProductDao) :
+        this(db, productDao, null, OwnerAccess, NoAudit, true)
+
+    constructor(db: StorviaDatabase, productDao: ProductDao, access: Access, audit: AuditSink) :
+        this(db, productDao, null, access, audit, true)
+
+    suspend fun save(product: ProductEntity, barcode: String?, isNew: Boolean): SaveResult {
+        access.require(Permission.MANAGE_PRODUCTS)
+        if (catalog?.isCloudMode() == true) return catalog.saveProduct(product, barcode)
+        return db.withTransaction {
             access.require(Permission.MANAGE_PRODUCTS)
             if (product.parentProductId != null) {
                 val parent = productDao.getById(product.parentProductId)
@@ -52,13 +70,30 @@ class ProductRepository @Inject constructor(
             product.parentProductId?.let { productDao.softDeleteBarcodes(it, System.currentTimeMillis()) }
             SaveResult.Saved(product.id)
         }
+    }
 
     /** Soft delete: past invoices keep working. Barcodes are freed for reuse. */
-    suspend fun archive(id: String) = db.withTransaction {
+    suspend fun archive(id: String) {
         access.require(Permission.MANAGE_PRODUCTS)
-        val name = productDao.getById(id)?.name ?: "product"
-        productDao.softDelete(id, System.currentTimeMillis())
-        audit.log(AuditAction.PRODUCT_ARCHIVED, "Archived $name", "PRODUCT", id)
-        productDao.softDeleteBarcodes(id, System.currentTimeMillis())
+        if (catalog?.isCloudMode() == true) {
+            catalog.archiveProduct(id)
+            return
+        }
+        db.withTransaction {
+            val product = productDao.getById(id)
+            val name = product?.name ?: "product"
+            val now = System.currentTimeMillis()
+            if (product != null && product.parentProductId == null) {
+                productDao.softDeleteVariantChildBarcodes(id, now)
+                productDao.softDeleteVariantChildren(id, now)
+            }
+            productDao.softDelete(id, now)
+            audit.log(AuditAction.PRODUCT_ARCHIVED, "Archived $name", "PRODUCT", id)
+            productDao.softDeleteBarcodes(id, now)
+        }
     }
+
+    suspend fun hasStockOrHistory(id: String) = catalog?.hasStockOrHistory(id)
+        ?: (productDao.currentStock(id) != 0L || productDao.hasStockHistory(id))
+    suspend fun hasVariants(id: String) = catalog?.hasVariants(id) ?: productDao.hasVariants(id)
 }

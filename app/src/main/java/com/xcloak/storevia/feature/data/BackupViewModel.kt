@@ -11,6 +11,9 @@ import com.xcloak.storevia.data.backup.AutoBackup
 import com.xcloak.storevia.data.backup.BackupManager
 import com.xcloak.storevia.data.backup.RestoreCheck
 import com.xcloak.storevia.data.cloud.CloudAccountRepository
+import com.xcloak.storevia.data.cloud.CloudProRequiredException
+import com.xcloak.storevia.data.cloud.CloudSyncCoordinator
+import com.xcloak.storevia.data.prefs.StorageMode
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -20,6 +23,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CancellationException
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.InputStream
@@ -34,6 +38,9 @@ data class BackupUi(
     val passphraseWrong: Boolean = false,
     /** A checked backup waiting for the user's final OK. */
     val confirmRestore: File? = null,
+    val cloudProChecked: Boolean = false,
+    val cloudProEnabled: Boolean = false,
+    val cloudProError: String? = null,
 )
 
 internal data class BackupProtection(val passphrase: String?)
@@ -67,18 +74,37 @@ class BackupViewModel @Inject constructor(
     private val audit: AuditSink,
     private val prefs: com.xcloak.storevia.data.prefs.AppPrefs,
     private val cloud: CloudAccountRepository,
+    private val cloudSyncCoordinator: CloudSyncCoordinator,
 ) : ViewModel() {
 
     private val _ui = MutableStateFlow(BackupUi())
     val ui: StateFlow<BackupUi> = _ui.asStateFlow()
+    val settings = prefs.settings
 
     /** Raw bytes of the file being restored, kept only while waiting for a passphrase. */
     private var pendingBytes: ByteArray? = null
     private val pendingBackupProtection = PendingBackupProtection()
 
-    init { refresh() }
+    init {
+        refresh()
+        refreshCloudProAccess()
+    }
 
     private fun refresh() = _ui.update { it.copy(lastManualAt = backups.lastManualBackupAt, autoBackups = backups.autoBackups()) }
+    fun refreshCloudProAccess() = viewModelScope.launch {
+        if (prefs.settings.value.storageMode != StorageMode.CLOUD) {
+            _ui.update { it.copy(cloudProChecked = true, cloudProEnabled = false, cloudProError = null) }
+            return@launch
+        }
+        try {
+            val enabled = cloud.planSnapshot()?.hasActiveProAccess() == true
+            _ui.update { it.copy(cloudProChecked = true, cloudProEnabled = enabled, cloudProError = null) }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            _ui.update { it.copy(cloudProChecked = true, cloudProEnabled = false, cloudProError = error.message) }
+        }
+    }
     fun dismissMessage() = _ui.update { it.copy(message = null) }
 
     fun prepareBackup(passphrase: String?) = pendingBackupProtection.prepare(passphrase)
@@ -92,8 +118,13 @@ class BackupViewModel @Inject constructor(
         }
         val passphrase = protection.passphrase
         if (!access.actor().can(Permission.BACKUP)) { _ui.update { it.copy(message = R.string.err_permission_denied) }; return@launch }
+        if (prefs.settings.value.storageMode != StorageMode.LOCAL) {
+            _ui.update { it.copy(message = R.string.cloud_file_backup_blocked) }
+            return@launch
+        }
         _ui.update { it.copy(busy = true) }
         val ok = try {
+            ensureCurrentBackupSource()
             withContext(Dispatchers.IO) {
                 context.contentResolver.openOutputStream(uri)?.use { backups.writeBackup(it, passphrase) } != null
             }
@@ -107,23 +138,54 @@ class BackupViewModel @Inject constructor(
         if (!access.actor().can(Permission.BACKUP)) { _ui.update { it.copy(message = R.string.err_permission_denied) }; return@launch }
         if (passphrase.isNullOrBlank()) { _ui.update { it.copy(message = R.string.cloud_backup_passphrase_required) }; return@launch }
         _ui.update { it.copy(busy = true) }
-        val result = runCatching { cloud.uploadBackup(passphrase) }
+        val result = try {
+            cloud.requireActiveProAccess()
+            ensureCurrentBackupSource()
+            cloud.uploadBackup(passphrase)
+            Result.success(Unit)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: Exception) {
+            Result.failure(error)
+        }
         if (result.isSuccess) audit.log(AuditAction.BACKUP, "Encrypted cloud backup saved")
-        _ui.update { it.copy(busy = false, message = if (result.isSuccess) R.string.cloud_backup_done else R.string.cloud_backup_failed) }
+        _ui.update {
+            it.copy(
+                busy = false,
+                message = when {
+                    result.isSuccess -> R.string.cloud_backup_done
+                    result.exceptionOrNull() is CloudProRequiredException -> R.string.cloud_pro_required
+                    else -> R.string.cloud_backup_failed
+                },
+            )
+        }
         refresh()
     }
 
     fun restoreCloudBackup() = viewModelScope.launch {
         if (!access.actor().can(Permission.RESTORE)) { _ui.update { it.copy(message = R.string.err_permission_denied) }; return@launch }
         _ui.update { it.copy(busy = true) }
-        val bytes = runCatching { cloud.downloadBackup() }.getOrNull()
-        if (bytes == null) { _ui.update { it.copy(busy = false, message = R.string.cloud_backup_restore_failed) }; return@launch }
+        val bytes = try {
+            cloud.downloadBackup()
+        } catch (error: CancellationException) {
+            throw error
+        } catch (error: CloudProRequiredException) {
+            _ui.update { it.copy(busy = false, message = R.string.cloud_pro_required) }
+            return@launch
+        } catch (_: Exception) {
+            _ui.update { it.copy(busy = false, message = R.string.cloud_backup_restore_failed) }
+            return@launch
+        }
         check(bytes, null)
     }
 
     fun startRestore(uri: Uri) = viewModelScope.launch {
         if (!access.actor().can(Permission.RESTORE)) {
             _ui.update { it.copy(message = R.string.err_permission_denied) }
+            return@launch
+        }
+        if (prefs.settings.value.storageMode == StorageMode.CLOUD) {
+            _ui.update { it.copy(message = R.string.restore_cloud_mode_blocked) }
             return@launch
         }
         _ui.update { it.copy(busy = true) }
@@ -137,6 +199,10 @@ class BackupViewModel @Inject constructor(
     fun startRestore(file: File) = viewModelScope.launch {
         if (!access.actor().can(Permission.RESTORE)) {
             _ui.update { it.copy(message = R.string.err_permission_denied) }
+            return@launch
+        }
+        if (prefs.settings.value.storageMode == StorageMode.CLOUD) {
+            _ui.update { it.copy(message = R.string.restore_cloud_mode_blocked) }
             return@launch
         }
         _ui.update { it.copy(busy = true) }
@@ -161,6 +227,11 @@ class BackupViewModel @Inject constructor(
     fun confirmRestore() {
         val staged = _ui.value.confirmRestore ?: return
         if (!access.actor().can(Permission.RESTORE)) { cancelRestore(); _ui.update { it.copy(message = R.string.err_permission_denied) }; return }
+        if (prefs.settings.value.storageMode == StorageMode.CLOUD) {
+            cancelRestore()
+            _ui.update { it.copy(message = R.string.restore_cloud_mode_blocked) }
+            return
+        }
         viewModelScope.launch {
             _ui.update { it.copy(busy = true, confirmRestore = null) }
             val a = access.actor()
@@ -178,6 +249,15 @@ class BackupViewModel @Inject constructor(
             RestoreCheck.NotABackup -> fail(R.string.restore_not_backup)
             RestoreCheck.TooNew -> fail(R.string.restore_too_new)
             RestoreCheck.Corrupt -> fail(R.string.restore_corrupt)
+        }
+
+    }
+
+    private suspend fun ensureCurrentBackupSource() {
+        if (prefs.settings.value.storageMode == StorageMode.CLOUD) {
+            check(cloudSyncCoordinator.synchronize() != null) {
+                "Could not refresh data from Cloud before creating the backup."
+            }
         }
     }
 

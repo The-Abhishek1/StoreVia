@@ -50,6 +50,7 @@ fun ProductDetailScreen(
     vm: ProductDetailViewModel = hiltViewModel(),
 ) {
     val ui by vm.ui.collectAsStateWithLifecycle()
+    val catalogError by vm.catalogError.collectAsStateWithLifecycle()
     var showReceive by remember { mutableStateOf(false) }
     var adjusting by remember { mutableStateOf<BatchEntity?>(null) }
     var showRecipeEditor by remember { mutableStateOf(false) }
@@ -79,7 +80,9 @@ fun ProductDetailScreen(
             },
         )
         if (d == null) {
-            LoadingState(Modifier.weight(1f).fillMaxWidth())
+            if (catalogError != null) {
+                Text(catalogError.orEmpty(), Modifier.weight(1f).fillMaxWidth().padding(24.dp), color = MaterialTheme.colorScheme.error)
+            } else LoadingState(Modifier.weight(1f).fillMaxWidth())
             return@Column
         }
 

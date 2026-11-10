@@ -17,35 +17,40 @@ data class SyncTable(
     val kind: SyncKind,
     val localOnly: Set<String> = emptySet(),
     val localDefaults: Map<String, Any> = emptyMap(),
+    /** Tables that must already be present before rows in this table are pulled. */
+    val dependsOn: Set<String> = emptySet(),
 )
 
 object SyncTables {
-    /** Parents before children, so foreign keys are satisfied while pulling. Held bills and sync state stay on the phone. */
+    /** Parents before children, so foreign keys and references in held-cart JSON are satisfied while pulling. */
     val all: List<SyncTable> = listOf(
         SyncTable("store", SyncKind.MUTABLE, localOnly = setOf("nextInvoiceNo"), localDefaults = mapOf("nextInvoiceNo" to 1L)),
         SyncTable("branches", SyncKind.MUTABLE, localOnly = setOf("selectedOnDevice"), localDefaults = mapOf("selectedOnDevice" to false)),
         SyncTable("units", SyncKind.MUTABLE),
         SyncTable("categories", SyncKind.MUTABLE),
         SyncTable("products", SyncKind.MUTABLE),
-        SyncTable("recipe_components", SyncKind.MUTABLE),
-        SyncTable("serial_numbers", SyncKind.MUTABLE),
-        SyncTable("product_barcodes", SyncKind.MUTABLE),
         SyncTable("batches", SyncKind.APPEND_ONLY),
+        SyncTable("recipe_components", SyncKind.MUTABLE, dependsOn = setOf("products")),
+        SyncTable("serial_numbers", SyncKind.MUTABLE, dependsOn = setOf("products", "batches")),
+        SyncTable("product_barcodes", SyncKind.MUTABLE, dependsOn = setOf("products")),
         SyncTable("suppliers", SyncKind.MUTABLE),
         SyncTable("customers", SyncKind.MUTABLE),
+        // Held-cart items are JSON-serialized CartItems and may reference products and batches.
+        // Their tombstones are synced when a cart is resumed or discarded.
+        SyncTable("held_carts", SyncKind.MUTABLE, dependsOn = setOf("customers", "products", "batches")),
         // PINs and lock-out state never leave the phone: a cashier's phone must not hold the owner's PIN hash.
         SyncTable("staff", SyncKind.MUTABLE,
             localOnly = setOf("pinHash", "pinSalt", "pinIterations", "failedAttempts", "lockedUntil"),
             localDefaults = mapOf("pinIterations" to 0L, "failedAttempts" to 0L, "lockedUntil" to 0L)),
         SyncTable("sales", SyncKind.MUTABLE),
-        SyncTable("sale_lines", SyncKind.APPEND_ONLY),
+        SyncTable("sale_lines", SyncKind.APPEND_ONLY, dependsOn = setOf("sales")),
         SyncTable("payments", SyncKind.APPEND_ONLY),
         SyncTable("sale_returns", SyncKind.APPEND_ONLY),
-        SyncTable("sale_return_lines", SyncKind.APPEND_ONLY),
+        SyncTable("sale_return_lines", SyncKind.APPEND_ONLY, dependsOn = setOf("sale_returns")),
         SyncTable("stock_movements", SyncKind.APPEND_ONLY),
         SyncTable("customer_ledger", SyncKind.APPEND_ONLY),
-        SyncTable("purchases", SyncKind.APPEND_ONLY),
-        SyncTable("purchase_lines", SyncKind.APPEND_ONLY),
+        SyncTable("purchases", SyncKind.MUTABLE, dependsOn = setOf("suppliers")),
+        SyncTable("purchase_lines", SyncKind.APPEND_ONLY, dependsOn = setOf("purchases")),
         SyncTable("supplier_ledger", SyncKind.APPEND_ONLY),
         SyncTable("audit_log", SyncKind.APPEND_ONLY),
     )

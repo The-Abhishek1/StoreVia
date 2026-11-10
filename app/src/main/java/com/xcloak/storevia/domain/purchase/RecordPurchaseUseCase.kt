@@ -6,6 +6,7 @@ import com.xcloak.storevia.core.database.StorviaDatabase
 import com.xcloak.storevia.core.database.dao.*
 import com.xcloak.storevia.core.database.entity.*
 import com.xcloak.storevia.core.money.Money
+import com.xcloak.storevia.data.cloud.CloudPurchaseRepository
 import java.time.LocalDate
 import javax.inject.Inject
 
@@ -42,6 +43,7 @@ class RecordPurchaseUseCase @Inject constructor(
     private val access: Access = OwnerAccess,
     private val audit: AuditSink = NoAudit,
     private val serialNumberDao: SerialNumberDao = db.serialNumberDao(),
+    private val cloudPurchases: CloudPurchaseRepository? = null,
 ) {
     suspend operator fun invoke(
         items: List<PurchaseItem>,
@@ -58,6 +60,27 @@ class RecordPurchaseUseCase @Inject constructor(
     ): String {
         access.require(Permission.MANAGE_PURCHASES)
         if (items.isEmpty()) throw PurchaseException(PurchaseException.Reason.NO_LINES)
+        cloudPurchases?.takeIf { it.isCloudMode() }?.let {
+            if (billTotalPaise != null && billTotalPaise < 0) throw PurchaseException(PurchaseException.Reason.INVALID_TOTAL)
+            if (paidPaise < 0 || (billTotalPaise != null && paidPaise > billTotalPaise)) {
+                throw PurchaseException(PurchaseException.Reason.PAID_EXCEEDS_TOTAL)
+            }
+            if (supplierId == null && billTotalPaise != null && paidPaise != billTotalPaise) {
+                throw PurchaseException(PurchaseException.Reason.SUPPLIER_REQUIRED_FOR_CREDIT)
+            }
+            return it.recordPurchase(
+                items = items,
+                supplierId = supplierId,
+                invoiceNo = invoiceNo,
+                purchaseDateMillis = purchaseDateMillis,
+                billTotalPaise = billTotalPaise,
+                paidPaise = paidPaise,
+                payMethod = payMethod,
+                notes = notes,
+                updateProductCost = updateProductCost,
+                now = now,
+            )
+        }
 
         return db.withTransaction {
             val branches = db.branchDao()

@@ -6,13 +6,10 @@ import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.xcloak.storevia.R
-import com.xcloak.storevia.core.database.dao.BatchDao
 import com.xcloak.storevia.core.database.dao.BranchDao
 import com.xcloak.storevia.core.database.dao.CustomerDao
 import com.xcloak.storevia.core.database.dao.HeldCartDao
-import com.xcloak.storevia.core.database.dao.ProductDao
 import com.xcloak.storevia.core.database.dao.ProductListRow
-import com.xcloak.storevia.core.database.dao.UnitDao
 import com.xcloak.storevia.core.database.entity.CustomerEntity
 import com.xcloak.storevia.core.database.entity.BatchEntity
 import com.xcloak.storevia.core.database.entity.HeldCartEntity
@@ -22,6 +19,14 @@ import com.xcloak.storevia.core.money.Rounding
 import com.xcloak.storevia.core.util.Parsing
 import com.xcloak.storevia.core.util.PackUnit
 import com.xcloak.storevia.domain.sale.*
+import com.xcloak.storevia.data.cloud.CloudPartyRepository
+import com.xcloak.storevia.data.cloud.CloudSettingsRepository
+import com.xcloak.storevia.data.cloud.CloudHeldCartException
+import com.xcloak.storevia.data.cloud.CloudHeldCartRepository
+import com.xcloak.storevia.data.cloud.CloudSalesInventoryException
+import com.xcloak.storevia.data.prefs.AppPrefs
+import com.xcloak.storevia.data.prefs.StorageModeRouter
+import com.xcloak.storevia.data.product.ProductCatalogRepository
 import com.xcloak.storevia.feature.stock.FieldError
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -117,14 +122,16 @@ sealed interface CheckoutEvent {
 @HiltViewModel
 class CheckoutViewModel @Inject constructor(
     private val handle: SavedStateHandle,
-    private val productDao: ProductDao,
-    private val batchDao: BatchDao,
-    private val unitDao: UnitDao,
     private val customerDao: CustomerDao,
     private val heldCartDao: HeldCartDao,
     private val branchDao: BranchDao,
     private val sale: CompleteSaleUseCase,
     private val access: Access,
+    private val prefs: AppPrefs,
+    private val catalog: ProductCatalogRepository,
+    private val cloudParties: CloudPartyRepository,
+    private val cloudHeldCarts: CloudHeldCartRepository,
+    private val cloudSettings: CloudSettingsRepository,
 ) : ViewModel() {
 
     private val _ui = MutableStateFlow(CheckoutUi())
@@ -133,18 +140,34 @@ class CheckoutViewModel @Inject constructor(
     private val _events = Channel<CheckoutEvent>(Channel.BUFFERED)
     val events = _events.receiveAsFlow()
 
-    val customers: StateFlow<List<CustomerEntity>> =
-        customerDao.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val customers: StateFlow<List<CustomerEntity>> = StorageModeRouter.observe(
+        prefs.settings.map { it.storageMode },
+        local = { customerDao.observeAll() },
+        cloud = { cloudParties.observeCustomerEntities() },
+    ).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    val heldCarts: StateFlow<List<HeldCartEntity>> =
-        heldCartDao.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    val heldCarts: StateFlow<List<HeldCartEntity>> = StorageModeRouter.observe(
+        prefs.settings.map { it.storageMode },
+        local = { heldCartDao.observeAll() },
+        cloud = { cloudHeldCarts.observeAll() },
+    ).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    private val activeBranchId = branchDao.observeSelectedId().map { it ?: "default" }.distinctUntilChanged()
+    private val activeBranchId = combine(
+        prefs.settings.map { it.storageMode to it.cloudStoreId }.distinctUntilChanged(),
+        branchDao.observeSelectedId(),
+        cloudSettings.observeSelectedBranchId(),
+    ) { (mode, storeId), localId, cloudId ->
+        StorageModeRouter.route(
+            mode,
+            local = { localId ?: "default" },
+            cloud = { cloudId ?: storeId ?: "default" },
+        )
+    }.distinctUntilChanged()
 
     val results: StateFlow<List<ProductListRow>> = combine(_ui.map { it.query.trim() }.distinctUntilChanged(), activeBranchId) { q, branchId ->
         q to branchId
     }.flatMapLatest { (q, branchId) ->
-        if (q.isEmpty()) flowOf(emptyList()) else productDao.listWithStock(q, branchId).map { it.take(8) }
+        if (q.isEmpty()) flowOf(emptyList()) else catalog.observeCheckoutRows(q, branchId)
     }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
@@ -165,7 +188,7 @@ class CheckoutViewModel @Inject constructor(
     fun onBarcodeScanned(code: String) {
         if (code.isBlank()) return
         viewModelScope.launch {
-            val product = productDao.findByBarcode(code)
+            val product = catalog.findProductByBarcode(code)
             if (product != null) addProduct(product.id)
             else _ui.update { it.copy(unknownBarcode = code, message = null) }
         }
@@ -182,8 +205,8 @@ class CheckoutViewModel @Inject constructor(
     }
 
     fun addProduct(id: String) = viewModelScope.launch {
-        val p = productDao.getById(id) ?: return@launch
-        val unit = unitDao.getById(p.unitId)
+        val p = catalog.getProduct(id) ?: return@launch
+        val unit = catalog.getUnit(p.unitId)
         val pack = try {
             PackUnit.fromAttributesJson(p.attributesJson)
         } catch (_: IllegalArgumentException) {
@@ -235,7 +258,7 @@ class CheckoutViewModel @Inject constructor(
     }
 
     fun openBatchPicker(productId: String) = viewModelScope.launch {
-        val options = batchDao.fefoBatches(productId, LocalDate.now(), activeBranchId.first())
+        val options = catalog.fefoBatches(productId, LocalDate.now(), activeBranchId.first())
         _ui.update {
             it.copy(
                 batchOptions = it.batchOptions + (productId to options),
@@ -296,7 +319,11 @@ class CheckoutViewModel @Inject constructor(
         viewModelScope.launch {
             if (!access.actor().can(Permission.MANAGE_CUSTOMERS)) return@launch
             val c = CustomerEntity(name = name.trim(), phone = phone.trim().ifEmpty { null })
-            customerDao.insert(c)
+            StorageModeRouter.routeSuspend(
+                prefs.settings.value.storageMode,
+                local = { customerDao.insert(c) },
+                cloud = { cloudParties.createCustomer(c) },
+            )
             setCustomer(c)
         }
     }
@@ -330,30 +357,69 @@ class CheckoutViewModel @Inject constructor(
         if (s.cart.isEmpty()) return
         val label = s.customer?.name
             ?: Instant.now().atZone(ZoneId.systemDefault()).format(DateTimeFormatter.ofPattern("d MMM, h:mm a"))
-        heldCartDao.insert(
-            HeldCartEntity(
-                label = label, customerId = s.customer?.id, interState = s.interState, billDiscountPaise = s.billDiscountPaise,
-                itemsJson = json.encodeToString(cartSerializer, s.cart), itemCount = s.cart.size,
-            )
+        val held = HeldCartEntity(
+            label = label,
+            customerId = s.customer?.id,
+            interState = s.interState,
+            billDiscountPaise = s.billDiscountPaise,
+            itemsJson = json.encodeToString(cartSerializer, s.cart),
+            itemCount = s.cart.size,
+        )
+        StorageModeRouter.routeSuspend(
+            prefs.settings.value.storageMode,
+            local = { heldCartDao.insert(held) },
+            cloud = { cloudHeldCarts.insert(held) },
         )
     }
 
     fun hold() = viewModelScope.launch {
-        holdCurrent()
-        _ui.value = CheckoutUi()
+        try {
+            holdCurrent()
+            _ui.value = CheckoutUi()
+        } catch (e: CloudHeldCartException) {
+            _ui.update { it.copy(message = FieldError(R.string.err_generic, e.message)) }
+        }
     }
 
     fun resume(heldId: String) = viewModelScope.launch {
-        val h = heldCartDao.getById(heldId) ?: return@launch
-        holdCurrent()   // don't lose what is on screen now
-        val cart = json.decodeFromString(cartSerializer, h.itemsJson)
-        val customer = h.customerId?.let { customerDao.getById(it) }
-        heldCartDao.delete(heldId)
-        _ui.value = CheckoutUi(cart = cart, customer = customer, interState = h.interState, billDiscountPaise = h.billDiscountPaise)
-        refreshPreview()
+        try {
+            val h = StorageModeRouter.routeSuspend(
+                prefs.settings.value.storageMode,
+                local = { heldCartDao.getById(heldId) },
+                cloud = { cloudHeldCarts.getById(heldId) },
+            ) ?: return@launch
+            holdCurrent()
+            val cart = json.decodeFromString(cartSerializer, h.itemsJson)
+            val customer = h.customerId?.let { id ->
+                StorageModeRouter.routeSuspend(
+                    prefs.settings.value.storageMode,
+                    local = { customerDao.getById(id) },
+                    cloud = { cloudParties.getCustomer(id) },
+                )
+            }
+            StorageModeRouter.routeSuspend(
+                prefs.settings.value.storageMode,
+                local = { heldCartDao.delete(heldId, System.currentTimeMillis()) },
+                cloud = { cloudHeldCarts.delete(heldId, System.currentTimeMillis()) },
+            )
+            _ui.value = CheckoutUi(cart = cart, customer = customer, interState = h.interState, billDiscountPaise = h.billDiscountPaise)
+            refreshPreview()
+        } catch (e: CloudHeldCartException) {
+            _ui.update { it.copy(message = FieldError(R.string.err_generic, e.message)) }
+        }
     }
 
-    fun deleteHeld(heldId: String) = viewModelScope.launch { heldCartDao.delete(heldId) }
+    fun deleteHeld(heldId: String) = viewModelScope.launch {
+        try {
+            StorageModeRouter.routeSuspend(
+                prefs.settings.value.storageMode,
+                local = { heldCartDao.delete(heldId, System.currentTimeMillis()) },
+                cloud = { cloudHeldCarts.delete(heldId, System.currentTimeMillis()) },
+            )
+        } catch (e: CloudHeldCartException) {
+            _ui.update { it.copy(message = FieldError(R.string.err_generic, e.message)) }
+        }
+    }
 
     // ------------------------------------------------------------------ totals and completion
 
@@ -378,6 +444,8 @@ class CheckoutViewModel @Inject constructor(
             } catch (e: InsufficientStockException) {
                 _ui.update { it.copy(preview = null, message = FieldError(R.string.err_insufficient_stock, e.productName)) }
             } catch (e: SaleValidationException) {
+                _ui.update { it.copy(preview = null, message = FieldError(R.string.err_generic, e.message)) }
+            } catch (e: CloudSalesInventoryException) {
                 _ui.update { it.copy(preview = null, message = FieldError(R.string.err_generic, e.message)) }
             }
         }
@@ -413,6 +481,8 @@ class CheckoutViewModel @Inject constructor(
             } catch (e: CreditLimitExceededException) {
                 _ui.update { it.copy(completing = false, message = FieldError(R.string.err_credit_limit, Money(e.limitPaise).format())) }
             } catch (e: SaleValidationException) {
+                _ui.update { it.copy(completing = false, message = FieldError(R.string.err_generic, e.message)) }
+            } catch (e: CloudSalesInventoryException) {
                 _ui.update { it.copy(completing = false, message = FieldError(R.string.err_generic, e.message)) }
             }
         }

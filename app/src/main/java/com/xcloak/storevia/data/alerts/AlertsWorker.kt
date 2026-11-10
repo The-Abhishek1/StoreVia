@@ -6,7 +6,9 @@ import androidx.work.WorkerParameters
 import com.xcloak.storevia.core.database.dao.BatchDao
 import com.xcloak.storevia.core.database.dao.BranchDao
 import com.xcloak.storevia.core.database.dao.ReportDao
+import com.xcloak.storevia.data.cloud.CloudSyncCoordinator
 import com.xcloak.storevia.data.prefs.AppPrefs
+import com.xcloak.storevia.data.prefs.StorageMode
 import dagger.hilt.EntryPoint
 import dagger.hilt.InstallIn
 import dagger.hilt.android.EntryPointAccessors
@@ -24,6 +26,7 @@ interface AlertsEntryPoint {
     fun batchDao(): BatchDao
     fun branchDao(): BranchDao
     fun prefs(): AppPrefs
+    fun cloudSyncCoordinator(): CloudSyncCoordinator
 }
 
 /** Runs once a day at the hour the owner chose. Says nothing when there is nothing to report. */
@@ -31,6 +34,11 @@ class AlertsWorker(context: Context, params: WorkerParameters) : CoroutineWorker
     override suspend fun doWork(): Result = try {
         val ep = EntryPointAccessors.fromApplication(applicationContext, AlertsEntryPoint::class.java)
         val settings = ep.prefs().settings.value
+        if (settings.storageMode == StorageMode.CLOUD) {
+            check(ep.cloudSyncCoordinator().synchronize() != null) {
+                "Could not refresh Cloud data before evaluating alerts."
+            }
+        }
         if (settings.alertsEnabled) {
             val branchId = resolveAlertBranchId(ep.branchDao())
             if (branchId != null) {

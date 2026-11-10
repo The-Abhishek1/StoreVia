@@ -2,6 +2,7 @@ package com.xcloak.storevia.data.cloud
 
 import com.xcloak.storevia.core.sync.SyncRemote
 import io.github.jan.supabase.SupabaseClient
+import kotlinx.coroutines.CancellationException
 import io.github.jan.supabase.postgrest.from
 import io.github.jan.supabase.postgrest.query.Order
 import kotlinx.serialization.json.JsonObject
@@ -14,30 +15,41 @@ import kotlinx.serialization.json.JsonObject
 class SupabaseRemote(private val client: SupabaseClient, private val storeId: String) : SyncRemote {
 
     override suspend fun pull(table: String, afterTs: String?, afterId: String, limit: Int): List<JsonObject> =
-        client.from(table).select {
-            filter {
-                eq("store_id", storeId)
-                if (afterTs != null) {
-                    // keyset page: strictly after (afterTs, afterId) in (server_updated_at, id) order
-                    or {
-                        gt("server_updated_at", afterTs)
-                        and {
-                            eq("server_updated_at", afterTs)
-                            gt("id", afterId)
+        try {
+            client.from(table).select {
+                filter {
+                    eq("store_id", storeId)
+                    if (afterTs != null) {
+                        or {
+                            gt("server_updated_at", afterTs)
+                            and {
+                                eq("server_updated_at", afterTs)
+                                gt("id", afterId)
+                            }
                         }
                     }
                 }
-            }
-            order("server_updated_at", Order.ASCENDING)
-            order("id", Order.ASCENDING)
-            limit(limit.toLong())
-        }.decodeList<JsonObject>()
+                order("server_updated_at", Order.ASCENDING)
+                order("id", Order.ASCENDING)
+                limit(limit.toLong())
+            }.decodeList<JsonObject>()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw IllegalStateException("Downloading cloud table '$table' failed.", e)
+        }
 
     override suspend fun push(table: String, rows: List<JsonObject>, ignoreDuplicates: Boolean) {
         if (rows.isEmpty()) return
-        client.from(table).upsert(rows) {
-            onConflict = "id"
-            this.ignoreDuplicates = ignoreDuplicates
+        try {
+            client.from(table).upsert(rows) {
+                onConflict = "id"
+                this.ignoreDuplicates = ignoreDuplicates
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            throw IllegalStateException("Uploading cloud table '$table' failed.", e)
         }
     }
 }

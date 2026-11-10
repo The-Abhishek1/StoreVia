@@ -14,6 +14,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xcloak.storevia.R
 import com.xcloak.storevia.core.access.Permission
@@ -24,27 +26,32 @@ import com.xcloak.storevia.domain.imports.DuplicatePolicy
 import com.xcloak.storevia.domain.imports.ImportError
 import com.xcloak.storevia.domain.imports.RowError
 import com.xcloak.storevia.domain.imports.SalesImportStockMode
+import com.xcloak.storevia.data.prefs.StorageMode
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun ImportExportScreen(onBack: () -> Unit, vm: ImportExportViewModel = hiltViewModel()) {
     val ui by vm.ui.collectAsStateWithLifecycle()
+    val settings by vm.settings.collectAsStateWithLifecycle()
     var pendingExport by remember { mutableStateOf<Pair<ExportKind, ExportFormat>?>(null) }
     var selectedFormat by remember { mutableStateOf(ExportFormat.CSV) }
     var pendingSalesFile by remember { mutableStateOf(false) }
     var pendingSalesPayments by remember { mutableStateOf(false) }
     val canImport = can(Permission.IMPORT_DATA)
     val canExport = can(Permission.EXPORT_DATA)
-    val proEnabled = ui.proAccessChecked && ui.proAccessEnabled
+    val localMode = settings.storageMode == StorageMode.LOCAL
+    val proEnabled = localMode || (ui.proAccessChecked && ui.proAccessEnabled)
 
-    LaunchedEffect(Unit) { vm.refreshProAccess() }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { vm.refreshProAccess() }
 
     val createLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("*/*")) { uri ->
         val selected = pendingExport
         if (uri != null && selected != null) vm.export(selected.first, selected.second, uri)
         pendingExport = null
     }
-    val openLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if (uri != null) vm.readImport(uri) }
+    val openLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) vm.readImport(uri)
+    }
     val salesOpenLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             when {
@@ -58,7 +65,7 @@ fun ImportExportScreen(onBack: () -> Unit, vm: ImportExportViewModel = hiltViewM
     }
 
     val snackbar = remember { SnackbarHostState() }
-    val message = ui.message?.let { stringResource(it, *ui.messageArgs.toTypedArray()) }
+    val message = ui.statusText ?: ui.message?.let { stringResource(it, *ui.messageArgs.toTypedArray()) }
     LaunchedEffect(message) { if (message != null) { snackbar.showSnackbar(message); vm.dismissMessage() } }
 
     Scaffold(
@@ -76,13 +83,17 @@ fun ImportExportScreen(onBack: () -> Unit, vm: ImportExportViewModel = hiltViewM
 
             Text(stringResource(R.string.section_import), style = MaterialTheme.typography.titleMedium)
             Text(stringResource(R.string.import_hint), style = MaterialTheme.typography.bodyMedium)
-            if (!proEnabled) Text(
-                ui.proAccessError ?: stringResource(
-                    if (ui.proAccessChecked) R.string.data_pro_required else R.string.data_pro_checking,
-                ),
-                style = MaterialTheme.typography.bodySmall,
-                color = if (ui.proAccessError != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            if (localMode) {
+                Text(stringResource(R.string.data_local_available), style = MaterialTheme.typography.bodySmall)
+            } else if (!proEnabled) {
+                Text(
+                    ui.proAccessError ?: stringResource(
+                        if (ui.proAccessChecked) R.string.data_pro_required else R.string.data_pro_checking,
+                    ),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (ui.proAccessError != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(
                     onClick = {
@@ -91,29 +102,63 @@ fun ImportExportScreen(onBack: () -> Unit, vm: ImportExportViewModel = hiltViewM
                     },
                     modifier = Modifier.weight(1f),
                 ) { Text(stringResource(R.string.download_template)) }
-                Button(onClick = { openLauncher.launch(arrayOf("text/*", "application/vnd.ms-excel", "application/octet-stream")) }, enabled = !ui.busy && canImport && proEnabled, modifier = Modifier.weight(1f)) {
+                Button(
+                    onClick = {
+                        openLauncher.launch(
+                            arrayOf(
+                                "text/csv",
+                                "text/comma-separated-values",
+                                "application/csv",
+                                "text/*",
+                                "application/vnd.ms-excel",
+                                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                "application/octet-stream",
+                            ),
+                        )
+                    },
+                    enabled = !ui.busy && canImport && proEnabled,
+                    modifier = Modifier.weight(1f),
+                ) {
                     Text(stringResource(R.string.choose_csv))
                 }
             }
             Text(stringResource(R.string.sales_import_title), style = MaterialTheme.typography.titleSmall)
             Text(stringResource(R.string.sales_import_instructions), style = MaterialTheme.typography.bodySmall)
+            if (!localMode) {
+                Text(stringResource(R.string.sales_cloud_import_historical_only), style = MaterialTheme.typography.bodySmall)
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(
-                    onClick = { pendingSalesFile = false; salesOpenLauncher.launch(arrayOf("text/*", "application/vnd.ms-excel", "application/octet-stream")) },
+                    onClick = {
+                        pendingSalesFile = false
+                        salesOpenLauncher.launch(
+                            importDocumentTypes(),
+                        )
+                    },
                     enabled = !ui.busy && canImport && proEnabled,
                     modifier = Modifier.weight(1f),
                 ) {
                     Text(stringResource(if (ui.salesSummarySelected) R.string.sales_summary_selected else R.string.sales_choose_summary))
                 }
                 OutlinedButton(
-                    onClick = { pendingSalesFile = true; salesOpenLauncher.launch(arrayOf("text/*", "application/vnd.ms-excel", "application/octet-stream")) },
+                    onClick = {
+                        pendingSalesFile = true
+                        salesOpenLauncher.launch(
+                            importDocumentTypes(),
+                        )
+                    },
                     enabled = !ui.busy && canImport && proEnabled,
                     modifier = Modifier.weight(1f),
                 ) {
                     Text(stringResource(if (ui.salesLinesSelected) R.string.sales_lines_selected else R.string.sales_choose_lines))
                 }
                 OutlinedButton(
-                    onClick = { pendingSalesPayments = true; salesOpenLauncher.launch(arrayOf("text/*", "application/vnd.ms-excel", "application/octet-stream")) },
+                    onClick = {
+                        pendingSalesPayments = true
+                        salesOpenLauncher.launch(
+                            importDocumentTypes(),
+                        )
+                    },
                     enabled = !ui.busy && canImport && proEnabled,
                     modifier = Modifier.weight(1f),
                 ) {
@@ -217,14 +262,22 @@ fun ImportExportScreen(onBack: () -> Unit, vm: ImportExportViewModel = hiltViewM
                             modifier = Modifier.clickable { vm.setSalesStockMode(SalesImportStockMode.HISTORICAL_ONLY) },
                         )
                     }
-                    Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                        RadioButton(
-                            selected = pending.stockMode == SalesImportStockMode.LIVE_DEDUCT,
-                            onClick = { vm.setSalesStockMode(SalesImportStockMode.LIVE_DEDUCT) },
-                        )
+                    if (localMode) {
+                        Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                            RadioButton(
+                                selected = pending.stockMode == SalesImportStockMode.LIVE_DEDUCT,
+                                onClick = { vm.setSalesStockMode(SalesImportStockMode.LIVE_DEDUCT) },
+                            )
+                            Text(
+                                stringResource(R.string.sales_live_deduct),
+                                modifier = Modifier.clickable { vm.setSalesStockMode(SalesImportStockMode.LIVE_DEDUCT) },
+                            )
+                        }
+                    } else {
                         Text(
-                            stringResource(R.string.sales_live_deduct),
-                            modifier = Modifier.clickable { vm.setSalesStockMode(SalesImportStockMode.LIVE_DEDUCT) },
+                            stringResource(R.string.sales_cloud_import_historical_only),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
                 }
@@ -238,6 +291,16 @@ fun ImportExportScreen(onBack: () -> Unit, vm: ImportExportViewModel = hiltViewM
         )
     }
 }
+
+private fun importDocumentTypes() = arrayOf(
+    "text/csv",
+    "text/comma-separated-values",
+    "application/csv",
+    "text/*",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/octet-stream",
+)
 
 @Composable
 private fun errorText(e: RowError): String {

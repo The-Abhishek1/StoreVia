@@ -15,6 +15,10 @@ import com.xcloak.storevia.domain.sale.ReturnException
 import com.xcloak.storevia.domain.sale.ReturnItem
 import com.xcloak.storevia.domain.sale.ReturnItemsUseCase
 import com.xcloak.storevia.domain.sale.ReturnPreview
+import com.xcloak.storevia.data.cloud.CloudSalesInventoryRepository
+import com.xcloak.storevia.data.prefs.AppPrefs
+import com.xcloak.storevia.data.prefs.StorageMode
+import com.xcloak.storevia.data.cloud.CloudSalesInventoryException
 import com.xcloak.storevia.feature.stock.FieldError
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.Job
@@ -53,6 +57,8 @@ class ReturnViewModel @Inject constructor(
     private val productDao: ProductDao,
     private val unitDao: UnitDao,
     private val returnItems: ReturnItemsUseCase,
+    private val cloudSales: CloudSalesInventoryRepository,
+    private val prefs: AppPrefs,
 ) : ViewModel() {
 
     private val saleId: String = checkNotNull(handle["id"])
@@ -66,13 +72,41 @@ class ReturnViewModel @Inject constructor(
 
     init {
         viewModelScope.launch {
-            val sale = saleDao.getById(saleId) ?: return@launch
-            val rows = saleDao.getLines(saleId).groupBy { it.productId }.map { (pid, lines) ->
-                val unit = productDao.getById(pid)?.let { unitDao.getById(it.unitId) }
-                ReturnRow(pid, lines.first().nameSnapshot, unit?.symbol.orEmpty(), unit?.allowDecimal ?: false,
-                    lines.sumOf { it.qtyMilli }, lines.sumOf { it.returnedQtyMilli })
+            try {
+                if (prefs.settings.value.storageMode == StorageMode.CLOUD) {
+                    val detail = cloudSales.loadReturnDetail(saleId) ?: run {
+                        _ui.update { it.copy(loaded = true) }
+                        return@launch
+                    }
+                    _ui.update {
+                        it.copy(
+                            loaded = true,
+                            rows = detail.lines.map { line ->
+                                ReturnRow(
+                                    line.productId,
+                                    line.name,
+                                    line.unitSymbol,
+                                    line.allowDecimal,
+                                    line.soldMilli,
+                                    line.returnedMilli,
+                                )
+                            },
+                            hasCustomer = detail.sale.customerId != null,
+                        )
+                    }
+                    return@launch
+                }
+                val sale = saleDao.getById(saleId) ?: return@launch
+                val rows = saleDao.getLines(saleId).groupBy { it.productId }.map { (pid, lines) ->
+                    val unit = productDao.getById(pid)?.let { unitDao.getById(it.unitId) }
+                    ReturnRow(pid, lines.first().nameSnapshot, unit?.symbol.orEmpty(), unit?.allowDecimal ?: false,
+                        lines.sumOf { it.qtyMilli }, lines.sumOf { it.returnedQtyMilli })
+                }
+                _ui.update { it.copy(loaded = true, rows = rows, hasCustomer = sale.customerId != null) }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                _ui.update { it.copy(loaded = true, error = FieldError(R.string.err_generic, e.message)) }
             }
-            _ui.update { it.copy(loaded = true, rows = rows, hasCustomer = sale.customerId != null) }
         }
     }
 
@@ -108,6 +142,8 @@ class ReturnViewModel @Inject constructor(
                 _ui.update { it.copy(preview = pv) }
             } catch (e: ReturnException) {
                 _ui.update { it.copy(preview = null, error = FieldError(errorRes(e))) }
+            } catch (e: CloudSalesInventoryException) {
+                _ui.update { it.copy(preview = null, error = FieldError(R.string.err_generic, e.message)) }
             }
         }
     }
@@ -133,6 +169,8 @@ class ReturnViewModel @Inject constructor(
                 _ui.update { it.copy(saving = false, error = FieldError(errorRes(e))) }
             } catch (e: PermissionDeniedException) {
                 _ui.update { it.copy(saving = false, error = FieldError(R.string.err_permission_denied)) }
+            } catch (e: CloudSalesInventoryException) {
+                _ui.update { it.copy(saving = false, error = FieldError(R.string.err_generic, e.message)) }
             }
         }
     }

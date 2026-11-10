@@ -43,9 +43,14 @@ fun StaffScreen(onBack: () -> Unit, vm: StaffViewModel = hiltViewModel()) {
     val staffMode by vm.staffMode.collectAsStateWithLifecycle()
     val actor by vm.actor.collectAsStateWithLifecycle()
     val settings by vm.settings.collectAsStateWithLifecycle()
+    val cloudMode by vm.cloudMode.collectAsStateWithLifecycle()
+    val loadError by vm.loadError.collectAsStateWithLifecycle()
+    val staffInvites by vm.staffInvites.collectAsStateWithLifecycle()
+    val inviteLoadError by vm.inviteLoadError.collectAsStateWithLifecycle()
     val canManageStaff = actor.can(Permission.MANAGE_STAFF)
     var enabling by remember { mutableStateOf(false) }
     var adding by remember { mutableStateOf(false) }
+    var inviting by remember { mutableStateOf(false) }
     var editing by remember { mutableStateOf<StaffEntity?>(null) }
 
     Scaffold(
@@ -57,11 +62,73 @@ fun StaffScreen(onBack: () -> Unit, vm: StaffViewModel = hiltViewModel()) {
             )
         },
         floatingActionButton = {
-            if (staffMode && canManageStaff) ExtendedFloatingActionButton(onClick = { adding = true }, icon = { Icon(Icons.Filled.PersonAdd, null) }, text = { Text(stringResource(R.string.add_staff)) })
+            if (cloudMode && actor.role == Role.OWNER) {
+                ExtendedFloatingActionButton(onClick = { inviting = true }, icon = { Icon(Icons.Filled.PersonAdd, null) }, text = { Text(stringResource(R.string.cloud_staff_invite)) })
+            } else if (!cloudMode && staffMode && canManageStaff) {
+                ExtendedFloatingActionButton(onClick = { adding = true }, icon = { Icon(Icons.Filled.PersonAdd, null) }, text = { Text(stringResource(R.string.add_staff)) })
+            }
         },
     ) { padding ->
         LazyColumn(Modifier.padding(padding), contentPadding = PaddingValues(16.dp, 8.dp, 16.dp, 96.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            if (!staffMode) {
+            if (cloudMode) {
+                item {
+                    Card(Modifier.fillMaxWidth()) {
+                        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(stringResource(R.string.cloud_staff_title), style = MaterialTheme.typography.titleMedium)
+                            Text(stringResource(R.string.cloud_staff_body), style = MaterialTheme.typography.bodyMedium)
+                            Text(stringResource(R.string.cloud_staff_pin_unsupported), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            if (actor.role == Role.OWNER) {
+                                Text(stringResource(R.string.cloud_staff_owner_invite_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
+                    Text(stringResource(R.string.staff_list), style = MaterialTheme.typography.titleMedium)
+                }
+                if (staff == null) {
+                    item { LoadingState(Modifier.fillMaxWidth().height(180.dp)) }
+                } else if (loadError != null) {
+                    item {
+                        Text(stringResource(loadError!!), color = MaterialTheme.colorScheme.error)
+                        TextButton(onClick = vm::refresh) { Text(stringResource(R.string.retry)) }
+                    }
+                } else {
+                    if (staff.orEmpty().isEmpty()) {
+                        item { Text(stringResource(R.string.cloud_staff_empty), style = MaterialTheme.typography.bodyMedium) }
+                    } else {
+                        items(staff.orEmpty(), key = { it.id }) { member ->
+                            ListItem(
+                                headlineContent = { Text(member.name, style = MaterialTheme.typography.titleMedium) },
+                                supportingContent = {
+                                    Text("${roleLabel(member.role)} · ${stringResource(R.string.cloud_member_role)}")
+                                },
+                            )
+                            HorizontalDivider()
+                        }
+                    }
+                    if (actor.role == Role.OWNER) {
+                        item {
+                            Spacer(Modifier.height(8.dp))
+                            Text(stringResource(R.string.cloud_staff_pending_title), style = MaterialTheme.typography.titleMedium)
+                            if (inviteLoadError != null) {
+                                Text(stringResource(inviteLoadError!!), color = MaterialTheme.colorScheme.error)
+                                TextButton(onClick = vm::refresh) { Text(stringResource(R.string.retry)) }
+                            } else if (staffInvites.isEmpty()) {
+                                Text(stringResource(R.string.cloud_staff_pending_empty), style = MaterialTheme.typography.bodyMedium)
+                            } else {
+                                Text(stringResource(R.string.cloud_staff_pending_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                        items(staffInvites, key = { it.email }) { invite ->
+                            ListItem(
+                                headlineContent = { Text(invite.email, style = MaterialTheme.typography.titleSmall) },
+                                supportingContent = { Text(stringResource(R.string.cloud_staff_invite_pending, roleLabel(invite.role))) },
+                            )
+                            HorizontalDivider()
+                        }
+                    }
+                }
+            } else if (!staffMode) {
                 item {
                     Text(stringResource(R.string.staff_off_title), style = MaterialTheme.typography.titleMedium)
                     Spacer(Modifier.height(4.dp))
@@ -139,11 +206,62 @@ fun StaffScreen(onBack: () -> Unit, vm: StaffViewModel = hiltViewModel()) {
         }
     }
 
-    if (enabling) PinFormDialog(R.string.staff_turn_on, nameLabel = R.string.field_owner_name, initialName = "Owner", askRole = false, onDismiss = { enabling = false },
+    if (!cloudMode && enabling) PinFormDialog(R.string.staff_turn_on, nameLabel = R.string.field_owner_name, initialName = "Owner", askRole = false, onDismiss = { enabling = false },
         onSave = { name, _, pin, again -> vm.enable(name, pin, again) })
-    if (adding) PinFormDialog(R.string.add_staff, nameLabel = R.string.field_staff_name, initialName = "", askRole = true, onDismiss = { adding = false },
+    if (!cloudMode && adding) PinFormDialog(R.string.add_staff, nameLabel = R.string.field_staff_name, initialName = "", askRole = true, onDismiss = { adding = false },
         onSave = { name, role, pin, again -> vm.add(name, role, pin, again) })
-    editing?.let { s -> EditStaffDialog(s, vm) { editing = null } }
+    if (!cloudMode) editing?.let { s -> EditStaffDialog(s, vm) { editing = null } }
+    if (cloudMode && inviting) CloudStaffInviteDialog(vm, onDismiss = { inviting = false })
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun CloudStaffInviteDialog(vm: StaffViewModel, onDismiss: () -> Unit) {
+    var email by remember { mutableStateOf("") }
+    var role by remember { mutableStateOf(Role.CASHIER) }
+    var error by remember { mutableStateOf<Int?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+    AlertDialog(
+        onDismissRequest = { if (!busy) onDismiss() },
+        title = { Text(stringResource(R.string.cloud_staff_invite_title)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(stringResource(R.string.cloud_staff_invite_body), style = MaterialTheme.typography.bodyMedium)
+                OutlinedTextField(
+                    value = email,
+                    onValueChange = { email = it; error = null },
+                    singleLine = true,
+                    label = { Text(stringResource(R.string.cloud_staff_email)) },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                    enabled = !busy,
+                )
+                Text(stringResource(R.string.staff_choose_role), style = MaterialTheme.typography.labelLarge)
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(Role.CASHIER, Role.MANAGER).forEach { candidate ->
+                        FilterChip(
+                            selected = role == candidate,
+                            onClick = { role = candidate },
+                            label = { Text(roleLabel(candidate)) },
+                            enabled = !busy,
+                        )
+                    }
+                }
+                error?.let { Text(stringResource(it), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
+            }
+        },
+        confirmButton = {
+            TextButton(enabled = !busy && email.isNotBlank(), onClick = {
+                busy = true
+                scope.launch {
+                    val result = vm.inviteCloudStaff(email, role)
+                    busy = false
+                    if (result == null) onDismiss() else error = result
+                }
+            }) { Text(stringResource(R.string.cloud_staff_invite)) }
+        },
+        dismissButton = { TextButton(enabled = !busy, onClick = onDismiss) { Text(stringResource(R.string.cancel)) } },
+    )
 }
 
 @Composable

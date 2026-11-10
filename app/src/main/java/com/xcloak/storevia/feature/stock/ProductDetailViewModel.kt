@@ -7,13 +7,11 @@ import androidx.lifecycle.viewModelScope
 import com.xcloak.storevia.R
 import com.xcloak.storevia.core.database.dao.BatchDao
 import com.xcloak.storevia.core.database.dao.BranchDao
-import com.xcloak.storevia.core.database.dao.ProductDao
 import com.xcloak.storevia.core.database.dao.ProductVariantRow
 import com.xcloak.storevia.core.database.dao.RecipeComponentRow
 import com.xcloak.storevia.core.database.dao.RecipeDao
 import com.xcloak.storevia.core.database.dao.SerialNumberDao
 import com.xcloak.storevia.core.database.dao.StockMovementDao
-import com.xcloak.storevia.core.database.dao.UnitDao
 import com.xcloak.storevia.core.database.dao.observeActiveBranchId
 import com.xcloak.storevia.core.database.entity.BatchEntity
 import com.xcloak.storevia.core.database.entity.MovementType
@@ -29,6 +27,10 @@ import com.xcloak.storevia.domain.stock.StockAdjustException
 import com.xcloak.storevia.domain.recipe.SaveRecipeComponentUseCase
 import com.xcloak.storevia.domain.recipe.RemoveRecipeComponentUseCase
 import com.xcloak.storevia.domain.recipe.RecipeValidationException
+import com.xcloak.storevia.data.product.ProductCatalogRepository
+import com.xcloak.storevia.data.cloud.CloudPurchaseRepository
+import com.xcloak.storevia.data.prefs.AppPrefs
+import com.xcloak.storevia.data.prefs.StorageModeRouter
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.*
 import java.time.LocalDate
@@ -60,8 +62,7 @@ private data class DetailBase(
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class ProductDetailViewModel @Inject constructor(
     handle: SavedStateHandle,
-    productDao: ProductDao,
-    private val unitDao: UnitDao,
+    private val catalog: ProductCatalogRepository,
     batchDao: BatchDao,
     stockDao: StockMovementDao,
     branchDao: BranchDao,
@@ -71,37 +72,71 @@ class ProductDetailViewModel @Inject constructor(
     private val adjustStock: AdjustStockUseCase,
     private val saveRecipeComponent: SaveRecipeComponentUseCase,
     private val removeRecipeComponent: RemoveRecipeComponentUseCase,
+    prefs: AppPrefs,
+    cloudPurchases: CloudPurchaseRepository,
 ) : ViewModel() {
 
     private val id: String = checkNotNull(handle["id"])
+    private val _catalogError = MutableStateFlow<String?>(null)
+    val catalogError: StateFlow<String?> = _catalogError.asStateFlow()
     private val units: StateFlow<List<UnitEntity>> =
-        unitDao.observeAll().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+        catalog.observeUnits()
+            .catch { _catalogError.value = it.message ?: "Cloud units could not be loaded."; emit(emptyList()) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
     fun unitSymbol(productId: String): String? {
         val product = ingredientOptions.value.firstOrNull { it.id == productId } ?: return null
         return units.value.firstOrNull { it.id == product.unitId }?.symbol
     }
     val ingredientOptions: StateFlow<List<ProductEntity>> =
-        productDao.observeActiveSellable().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+        catalog.observeActiveProducts()
+            .catch { _catalogError.value = it.message ?: "Cloud products could not be loaded."; emit(emptyList()) }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    private val activeBranchId = branchDao.observeActiveBranchId().filterNotNull()
+    private val activeBranchId = StorageModeRouter.observe(
+        prefs.settings.map { it.storageMode },
+        local = { branchDao.observeActiveBranchId() },
+        cloud = { cloudPurchases.observeBranchId() },
+    ).filterNotNull()
     private val base = activeBranchId.flatMapLatest { branchId ->
         combine(
-            productDao.observeById(id),
-            unitDao.observeAll(),
-            batchDao.observeForProduct(id, branchId),
-            productDao.observeBarcode(id),
-            stockDao.observeForProductAtBranch(id, branchId, 30),
+            catalog.observeProduct(id),
+            catalog.observeUnits(),
+            StorageModeRouter.observe(
+                prefs.settings.map { it.storageMode },
+                local = { batchDao.observeForProduct(id, branchId) },
+                cloud = { cloudPurchases.observeBatches(id, branchId) },
+            ),
+            catalog.observeBarcode(id),
+            StorageModeRouter.observe(
+                prefs.settings.map { it.storageMode },
+                local = { stockDao.observeForProductAtBranch(id, branchId, 30) },
+                cloud = { cloudPurchases.observeStockMovements(id, branchId, 30) },
+            ),
         ) { product, units, batches, barcode, movements ->
             DetailBase(product, units, batches, barcode, movements)
+        }.catch { error ->
+            _catalogError.value = error.message ?: "Cloud product details could not be loaded."
+            emit(DetailBase(null, emptyList(), emptyList(), null, emptyList()))
         }
     }
 
     val ui: StateFlow<DetailUi?> = combine(
         base,
-        activeBranchId.flatMapLatest { productDao.observeVariants(id, it) },
-        stockDao.observeMovementCount(id),
+        activeBranchId.flatMapLatest { catalog.observeVariants(id, it) }
+            .catch { error -> _catalogError.value = error.message ?: "Cloud variants could not be loaded."; emit(emptyList()) },
+        StorageModeRouter.observe(
+            prefs.settings.map { it.storageMode },
+            local = { stockDao.observeMovementCount(id) },
+            cloud = { cloudPurchases.observeMovementCount(id) },
+        ),
         recipeDao.observeForProduct(id),
-        activeBranchId.flatMapLatest { serialNumberDao.observeForProduct(id, it) },
+        activeBranchId.flatMapLatest { branchId ->
+            StorageModeRouter.observe(
+                prefs.settings.map { it.storageMode },
+                local = { serialNumberDao.observeForProduct(id, branchId) },
+                cloud = { cloudPurchases.observeSerialNumbers(id, branchId) },
+            )
+        },
     ) { detail, variants, movementCount, recipeComponents, serialNumbers ->
         detail.product?.takeIf { it.deletedAt == null }?.let { p ->
             DetailUi(
@@ -169,6 +204,8 @@ class ProductDetailViewModel @Inject constructor(
                 SerialNumberValidationException.Reason.PRODUCT_NOT_TRACKED -> R.string.err_serial_not_tracked
             }
         } catch (e: PermissionDeniedException) { R.string.err_permission_denied }
+        catch (e: kotlinx.coroutines.CancellationException) { throw e }
+        catch (_: Exception) { R.string.err_cloud_stock_operation_failed }
     }
 
     /** @return a string-resource id describing the problem, or null on success. */

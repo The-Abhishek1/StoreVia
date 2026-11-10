@@ -58,6 +58,42 @@ class ProductRepositoryTest {
         assertTrue(repo.save(product("Coffee"), "222", isNew = true) is SaveResult.Saved)
     }
 
+    @Test fun archivingVariantGroupArchivesChildrenAndTheirBarcodes() = runBlocking {
+        val parent = product("Shirt")
+        val small = product("Shirt - Small").copy(parentProductId = parent.id, variantLabel = "Small")
+        val large = product("Shirt - Large").copy(parentProductId = parent.id, variantLabel = "Large")
+        repo.save(parent, null, isNew = true)
+        repo.save(small, "small-code", isNew = true)
+        repo.save(large, "large-code", isNew = true)
+
+        repo.archive(parent.id)
+
+        for (archived in listOf(parent, small, large)) {
+            val stored = db.productDao().getById(archived.id)!!
+            assertNotNull(stored.deletedAt)
+            assertTrue(stored.dirty)
+        }
+        assertTrue(db.productDao().listWithStock("").first().isEmpty())
+        assertTrue(repo.save(product("New Small Shirt"), "small-code", isNew = true) is SaveResult.Saved)
+        assertTrue(repo.save(product("New Large Shirt"), "large-code", isNew = true) is SaveResult.Saved)
+    }
+
+    @Test fun archivingVariantLeavesParentAndSiblingSellable() = runBlocking {
+        val parent = product("Mug")
+        val red = product("Mug - Red").copy(parentProductId = parent.id, variantLabel = "Red")
+        val blue = product("Mug - Blue").copy(parentProductId = parent.id, variantLabel = "Blue")
+        repo.save(parent, null, isNew = true)
+        repo.save(red, null, isNew = true)
+        repo.save(blue, null, isNew = true)
+
+        repo.archive(red.id)
+
+        assertNull(db.productDao().getById(parent.id)!!.deletedAt)
+        assertNotNull(db.productDao().getById(red.id)!!.deletedAt)
+        assertNull(db.productDao().getById(blue.id)!!.deletedAt)
+        assertEquals(listOf(blue.id), db.productDao().listWithStock("").first().map { it.id })
+    }
+
     @Test fun searchFindsByNameAndBarcode() = runBlocking {
         val tea = product("Masala Tea")
         repo.save(tea, "333", isNew = true)

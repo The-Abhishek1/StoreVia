@@ -71,6 +71,7 @@ class CompleteSaleUseCase @Inject constructor(
     private val series: InvoiceSeries = NoSeries,
     private val recipeDao: RecipeDao = db.recipeDao(),
     private val serialNumberDao: SerialNumberDao = db.serialNumberDao(),
+    private val cloudOperations: SalesInventoryOperations = LocalSalesInventoryOperations,
 ) {
     private data class SerialAssignment(val serialId: String, val saleLineId: String)
     private class Computed(
@@ -99,6 +100,14 @@ class CompleteSaleUseCase @Inject constructor(
         today: LocalDate = LocalDate.now(),
         billDiscountPaise: Long = 0,
     ): SalePreview {
+        if (cloudOperations.isCloudMode()) {
+            return cloudOperations.previewSale(
+                items = items,
+                interState = interState,
+                billDiscountPaise = billDiscountPaise,
+                now = System.currentTimeMillis(),
+            )
+        }
         val store = storeDao.get() ?: throw SaleValidationException("Store is not set up")
         val branchId = db.branchDao().activeBranchId()
         val c = computeLines("preview", items, store, branchId, interState, today, now = 0L, billDiscountPaise = billDiscountPaise)
@@ -117,6 +126,17 @@ class CompleteSaleUseCase @Inject constructor(
     ): String {
         access.require(Permission.SELL)
         if (items.isEmpty()) throw SaleValidationException("Cart is empty")
+        if (cloudOperations.isCloudMode()) {
+            if (items.any { it.preferredBatchId != null }) access.require(Permission.OVERRIDE_BATCH)
+            return cloudOperations.checkout(
+                items = items,
+                payments = payments,
+                customerId = customerId,
+                interState = interState,
+                billDiscountPaise = billDiscountPaise,
+                now = now,
+            )
+        }
 
         return db.withTransaction {
             val store = storeDao.get() ?: throw SaleValidationException("Store is not set up")

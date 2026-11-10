@@ -14,6 +14,15 @@ data class PurchaseListRow(
     val totalPaise: Long, val paidPaise: Long,
 )
 
+data class PurchasePayableRow(
+    val id: String,
+    val invoiceNo: String?,
+    val purchaseDate: Long,
+    val totalPaise: Long,
+    val paidPaise: Long,
+    val branchName: String?,
+)
+
 @Dao
 interface SupplierDao {
     @Query("SELECT * FROM suppliers WHERE id = :id AND deletedAt IS NULL") fun observeById(id: String): Flow<SupplierEntity?>
@@ -29,8 +38,15 @@ interface SupplierDao {
     fun observeWithBalance(q: String): Flow<List<SupplierBalanceRow>>
 
     @Query("SELECT * FROM suppliers WHERE deletedAt IS NULL ORDER BY name COLLATE NOCASE") fun observeAll(): Flow<List<SupplierEntity>>
+    @Query("UPDATE suppliers SET deletedAt = :now, updatedAt = :now, dirty = 1 WHERE id = :id AND deletedAt IS NULL")
+    suspend fun softDelete(id: String, now: Long): Int
 
     @Query("SELECT COALESCE(SUM(amountPaise), 0) FROM supplier_ledger WHERE supplierId = :id") suspend fun balance(id: String): Long
+    @Query("""SELECT COALESCE(SUM(amountPaise), 0) -
+                     COALESCE((SELECT SUM(amountPaise) FROM supplier_ledger
+                               WHERE supplierId = :id AND refType = 'PURCHASE' AND refId IS NOT NULL), 0)
+              FROM supplier_ledger WHERE supplierId = :id""")
+    suspend fun unallocatedBalance(id: String): Long
     @Query("SELECT * FROM supplier_ledger WHERE supplierId = :id ORDER BY createdAt ASC, rowid ASC") fun observeLedger(id: String): Flow<List<SupplierLedgerEntity>>
     @Insert suspend fun insertLedger(e: SupplierLedgerEntity)
 
@@ -61,6 +77,18 @@ interface PurchaseDao {
         query: String = "",
         unpaidOnly: Boolean = false,
     ): Flow<List<PurchaseListRow>>
+
+    @Query("""SELECT p.id, p.invoiceNo, p.purchaseDate, p.totalPaise, p.paidPaise, b.name AS branchName
+              FROM purchases p LEFT JOIN branches b ON b.id = p.branchId
+              WHERE p.supplierId = :supplierId AND p.totalPaise > p.paidPaise
+              ORDER BY p.purchaseDate ASC, p.createdAt ASC""")
+    fun observeUnpaidForSupplier(supplierId: String): Flow<List<PurchasePayableRow>>
+
+    @Query("""UPDATE purchases
+              SET paidPaise = paidPaise + :amountPaise, dirty = 1
+              WHERE id = :purchaseId AND supplierId = :supplierId
+                AND totalPaise - paidPaise >= :amountPaise""")
+    suspend fun addPayment(purchaseId: String, supplierId: String, amountPaise: Long): Int
 
     @Query("SELECT * FROM purchases WHERE id = :id AND :branchId IS NOT NULL AND branchId = :branchId")
     fun observeById(id: String, branchId: String?): Flow<PurchaseEntity?>

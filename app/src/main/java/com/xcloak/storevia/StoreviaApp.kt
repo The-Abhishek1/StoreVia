@@ -8,6 +8,7 @@ import androidx.work.WorkManager
 import com.xcloak.storevia.data.alerts.AlertNotifier
 import com.xcloak.storevia.data.alerts.AlertScheduler
 import com.xcloak.storevia.data.backup.AutoBackupWorker
+import com.xcloak.storevia.data.cloud.CloudSyncCoordinator
 import com.xcloak.storevia.data.prefs.AppPrefs
 import dagger.hilt.android.HiltAndroidApp
 import java.util.concurrent.TimeUnit
@@ -16,9 +17,11 @@ import javax.inject.Inject
 @HiltAndroidApp
 class StoreviaApp : Application() {
     @Inject lateinit var prefs: AppPrefs
+    @Inject lateinit var cloudSyncCoordinator: CloudSyncCoordinator
 
     override fun onCreate() {
         super.onCreate()
+        cloudSyncCoordinator.start()
         AlertNotifier.createChannel(this)
         AlertScheduler.schedule(this, prefs.settings.value, reschedule = false)
 

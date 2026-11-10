@@ -19,7 +19,6 @@ import androidx.compose.material.icons.filled.Store
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -34,12 +33,12 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.xcloak.storevia.R
+import com.xcloak.storevia.data.cloud.CloudStoreOption
 
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun EntryWelcomeScreen(
     onOnlineCloud: () -> Unit,
-    onPlatformAdmin: () -> Unit,
     onWorkOffline: () -> Unit,
 ) {
     Column(
@@ -64,17 +63,6 @@ fun EntryWelcomeScreen(
         OutlinedButton(onClick = onWorkOffline, modifier = Modifier.fillMaxWidth().height(50.dp)) {
             Icon(Icons.Filled.CloudOff, contentDescription = null)
             Text(stringResource(R.string.entry_offline_store), Modifier.padding(start = 8.dp))
-        }
-        Spacer(Modifier.height(20.dp))
-        HorizontalDivider()
-        Text(
-            stringResource(R.string.entry_restricted_access),
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
-        )
-        OutlinedButton(onClick = onPlatformAdmin, modifier = Modifier.fillMaxWidth().height(48.dp)) {
-            Text(stringResource(R.string.entry_platform_admin))
         }
     }
 }
@@ -159,6 +147,8 @@ fun StoreChoiceScreen(
     onSignOut: () -> Unit,
     onCreate: () -> Unit,
     onJoin: () -> Unit,
+    stores: List<CloudStoreOption> = emptyList(),
+    onSelectStore: ((String) -> Unit)? = null,
     connectionError: String? = null,
     onRetryExistingStore: (() -> Unit)? = null,
 ) {
@@ -175,7 +165,7 @@ fun StoreChoiceScreen(
         },
     ) { padding ->
         Column(
-            Modifier.fillMaxSize().padding(padding).padding(24.dp),
+            Modifier.fillMaxSize().padding(padding).padding(24.dp).verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.Center,
         ) {
             Text(stringResource(R.string.entry_store_choice_body), style = MaterialTheme.typography.bodyLarge)
@@ -191,8 +181,45 @@ fun StoreChoiceScreen(
                         Text(stringResource(R.string.entry_retry_store_connection))
                     }
                 }
+            } else if (stores.isEmpty()) {
+                Text(
+                    stringResource(R.string.entry_no_cloud_store_membership),
+                    modifier = Modifier.padding(top = 12.dp),
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                onRetryExistingStore?.let { retry ->
+                    OutlinedButton(onClick = retry, modifier = Modifier.fillMaxWidth().padding(top = 8.dp).height(50.dp)) {
+                        Text(stringResource(R.string.entry_retry_store_connection))
+                    }
+                }
             }
             Spacer(Modifier.height(24.dp))
+            if (stores.isNotEmpty() && onSelectStore != null) {
+                Text(stringResource(R.string.entry_select_cloud_store), style = MaterialTheme.typography.titleMedium)
+                stores.forEach { store ->
+                    Card(
+                        modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceContainer),
+                    ) {
+                        Column(Modifier.fillMaxWidth().padding(12.dp)) {
+                            Text(store.name, style = MaterialTheme.typography.titleSmall)
+                            Text(
+                                "${store.storeType.name} · ${store.role}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            OutlinedButton(
+                                onClick = { onSelectStore(store.id) },
+                                modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                            ) {
+                                Text(stringResource(R.string.entry_open_cloud_store))
+                            }
+                        }
+                    }
+                }
+                Spacer(Modifier.height(16.dp))
+            }
             Button(onClick = onCreate, modifier = Modifier.fillMaxWidth().height(54.dp)) {
                 Text(stringResource(R.string.entry_create_store))
             }

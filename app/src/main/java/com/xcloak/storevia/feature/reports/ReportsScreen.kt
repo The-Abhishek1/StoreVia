@@ -13,6 +13,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xcloak.storevia.R
 import com.xcloak.storevia.core.database.dao.BatchAgg
@@ -28,6 +30,7 @@ import java.time.ZoneOffset
 fun ReportsScreen(vm: ReportsViewModel = hiltViewModel()) {
     val ui by vm.ui.collectAsStateWithLifecycle()
     val customRange by vm.customRange.collectAsStateWithLifecycle()
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { vm.retry() }
     val s = ui.sales
     var showStartPicker by remember { mutableStateOf(false) }
     var showEndPicker by remember { mutableStateOf(false) }
@@ -47,6 +50,18 @@ fun ReportsScreen(vm: ReportsViewModel = hiltViewModel()) {
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        if (ui.isLoading) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
+        if (ui.error != null) item {
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+            ) {
+                Column(Modifier.padding(16.dp)) {
+                    Text("Report data is unavailable. Check your connection and retry.", color = MaterialTheme.colorScheme.onErrorContainer)
+                    TextButton(onClick = vm::retry) { Text(stringResource(R.string.retry)) }
+                }
+            }
+        }
         item {
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf(Period.TODAY to R.string.period_today, Period.LAST_7_DAYS to R.string.period_7_days, Period.THIS_MONTH to R.string.period_month)

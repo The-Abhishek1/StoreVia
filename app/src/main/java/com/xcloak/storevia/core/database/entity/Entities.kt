@@ -352,7 +352,7 @@ data class SaleReturnLineEntity(
     val dirty: Boolean = true,
 )
 
-/** A bill parked while the shopkeeper serves someone else. Local to the device; the cart is stored as JSON. */
+/** A bill parked while the shopkeeper serves someone else; the cart contents are stored as JSON. */
 @Entity(tableName = "held_carts")
 data class HeldCartEntity(
     @PrimaryKey val id: String = newId(),
@@ -363,6 +363,9 @@ data class HeldCartEntity(
     val itemsJson: String,
     val itemCount: Int,
     val createdAt: Long = System.currentTimeMillis(),
+    val updatedAt: Long = createdAt,
+    val deletedAt: Long? = null,
+    val dirty: Boolean = true,
 )
 
 @Entity(tableName = "suppliers", indices = [Index("name")])

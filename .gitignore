@@ -8,3 +8,4 @@ build/
 .cxx
 *.jks
 *.keystore
+/keystore.properties

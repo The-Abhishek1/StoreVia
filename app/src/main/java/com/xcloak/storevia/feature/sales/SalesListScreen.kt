@@ -29,6 +29,9 @@ import com.xcloak.storevia.core.database.dao.BranchDao
 import com.xcloak.storevia.core.database.entity.SaleEntity
 import com.xcloak.storevia.core.database.entity.SaleStatus
 import com.xcloak.storevia.core.money.Money
+import com.xcloak.storevia.data.cloud.CloudSalesInventoryRepository
+import com.xcloak.storevia.data.prefs.AppPrefs
+import com.xcloak.storevia.data.prefs.StorageModeRouter
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -41,10 +44,18 @@ import javax.inject.Inject
 
 @HiltViewModel
 @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-class SalesListViewModel @Inject constructor(saleDao: SaleDao, branchDao: BranchDao) : ViewModel() {
+class SalesListViewModel @Inject constructor(
+    saleDao: SaleDao,
+    branchDao: BranchDao,
+    prefs: AppPrefs,
+    cloudSales: CloudSalesInventoryRepository,
+) : ViewModel() {
     private val activeBranchId = branchDao.observeActiveBranchId()
     private val query = MutableStateFlow("")
     private val statusFilter = MutableStateFlow(SalesStatusFilter.ALL)
+    private val refreshGeneration = MutableStateFlow(0)
+    private val _cloudError = MutableStateFlow<String?>(null)
+    val cloudError: StateFlow<String?> = _cloudError.asStateFlow()
 
     val branchName: StateFlow<String?> = combine(branchDao.observeAll(), activeBranchId) { branches, id ->
         branches.firstOrNull { it.id == id }?.name
@@ -52,9 +63,25 @@ class SalesListViewModel @Inject constructor(saleDao: SaleDao, branchDao: Branch
 
     val searchQuery: StateFlow<String> = query.asStateFlow()
     val selectedStatus: StateFlow<SalesStatusFilter> = statusFilter.asStateFlow()
-    val recentSales: StateFlow<List<SaleEntity>?> = activeBranchId.filterNotNull()
-        .flatMapLatest { saleDao.observeRecent(200, it) }
+    val recentSales: StateFlow<List<SaleEntity>?> = combine(
+        activeBranchId.filterNotNull(),
+        prefs.settings.map { it.storageMode }.distinctUntilChanged(),
+        refreshGeneration,
+    ) { branchId, mode, _ -> branchId to mode }
+        .flatMapLatest { (branchId, mode) ->
+            StorageModeRouter.route(
+                mode,
+                local = { saleDao.observeRecent(200, branchId) },
+                cloud = { cloudSales.observeRecentSales(branchId) },
+            )
+        }
+        .onEach { _cloudError.value = null }
+        .catch { failure ->
+            _cloudError.value = failure.message ?: "Cloud sales could not be loaded."
+            emit(emptyList())
+        }
         .map<List<SaleEntity>, List<SaleEntity>?> { it }
+        .onStart { emit(null) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), null)
 
     val sales: StateFlow<List<SaleEntity>?> = combine(recentSales, query, statusFilter) { rows, search, status ->
@@ -72,6 +99,7 @@ class SalesListViewModel @Inject constructor(saleDao: SaleDao, branchDao: Branch
 
     fun setSearchQuery(value: String) { query.value = value }
     fun setStatusFilter(value: SalesStatusFilter) { statusFilter.value = value }
+    fun retry() { refreshGeneration.update { it + 1 } }
 }
 
 enum class SalesStatusFilter { ALL, OUTSTANDING, CANCELLED }
@@ -85,6 +113,7 @@ fun SalesListScreen(onNewSale: () -> Unit, onOpen: (String) -> Unit, vm: SalesLi
     val branchName by vm.branchName.collectAsStateWithLifecycle()
     val query by vm.searchQuery.collectAsStateWithLifecycle()
     val status by vm.selectedStatus.collectAsStateWithLifecycle()
+    val cloudError by vm.cloudError.collectAsStateWithLifecycle()
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
         floatingActionButton = {
@@ -92,6 +121,16 @@ fun SalesListScreen(onNewSale: () -> Unit, onOpen: (String) -> Unit, vm: SalesLi
         },
     ) { padding ->
         Column(Modifier.padding(padding).fillMaxSize()) {
+            cloudError?.let { message ->
+                Text(
+                    message,
+                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                    color = MaterialTheme.colorScheme.error,
+                )
+                OutlinedButton(onClick = vm::retry, modifier = Modifier.padding(horizontal = 16.dp)) {
+                    Text(stringResource(R.string.retry))
+                }
+            }
             branchName?.let {
                 Text(stringResource(R.string.stock_branch_scope, it), Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                     style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)

@@ -15,11 +15,14 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xcloak.storevia.R
 import com.xcloak.storevia.core.access.Permission
 import com.xcloak.storevia.core.ui.can
 import com.xcloak.storevia.data.backup.AutoBackup
+import com.xcloak.storevia.data.prefs.StorageMode
 import java.text.DateFormat
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -29,9 +32,13 @@ import java.util.Locale
 @Composable
 fun BackupScreen(onBack: () -> Unit, vm: BackupViewModel = hiltViewModel()) {
     val ui by vm.ui.collectAsStateWithLifecycle()
+    val settings by vm.settings.collectAsStateWithLifecycle()
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { vm.refreshCloudProAccess() }
     var askBackupPassphrase by remember { mutableStateOf(false) }
     var backupToCloud by remember { mutableStateOf(false) }
     var restoreFromAuto by remember { mutableStateOf<AutoBackup?>(null) }
+    val localMode = settings.storageMode == StorageMode.LOCAL
+    val canBackup = can(Permission.BACKUP)
     val canRestore = can(Permission.RESTORE)
 
     val createLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
@@ -64,40 +71,62 @@ fun BackupScreen(onBack: () -> Unit, vm: BackupViewModel = hiltViewModel()) {
                 )
             }
             item {
-                Button(onClick = { backupToCloud = false; askBackupPassphrase = true }, enabled = !ui.busy, modifier = Modifier.fillMaxWidth().height(52.dp)) {
-                    Text(stringResource(R.string.backup_now))
+                if (localMode) {
+                    if (canBackup) Button(
+                        onClick = { backupToCloud = false; askBackupPassphrase = true },
+                        enabled = !ui.busy,
+                        modifier = Modifier.fillMaxWidth().height(52.dp),
+                    ) {
+                        Text(stringResource(R.string.backup_now))
+                    }
+                    Text(stringResource(R.string.backup_now_hint), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
+                } else {
+                    if (canBackup) OutlinedButton(
+                        onClick = { backupToCloud = true; askBackupPassphrase = true },
+                        enabled = !ui.busy && ui.cloudProChecked && ui.cloudProEnabled,
+                        modifier = Modifier.fillMaxWidth().height(48.dp),
+                    ) { Text(stringResource(R.string.cloud_backup_now)) }
                 }
-                Text(stringResource(R.string.backup_now_hint), style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 4.dp))
-                OutlinedButton(
-                    onClick = { backupToCloud = true; askBackupPassphrase = true },
-                    enabled = !ui.busy,
-                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp).height(48.dp),
-                ) { Text(stringResource(R.string.cloud_backup_now)) }
+                if (!localMode && !ui.cloudProEnabled) {
+                    Text(
+                        ui.cloudProError ?: stringResource(
+                            if (ui.cloudProChecked) R.string.cloud_pro_required else R.string.cloud_pro_checking,
+                        ),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (ui.cloudProError != null) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
             item {
-                if (canRestore) OutlinedButton(onClick = { openLauncher.launch(arrayOf("*/*")) }, enabled = !ui.busy, modifier = Modifier.fillMaxWidth().height(48.dp)) {
+                if (canRestore && localMode) OutlinedButton(onClick = { openLauncher.launch(arrayOf("*/*")) }, enabled = !ui.busy, modifier = Modifier.fillMaxWidth().height(48.dp)) {
                     Text(stringResource(R.string.restore_from_file))
                 }
-                if (canRestore) OutlinedButton(onClick = vm::restoreCloudBackup, enabled = !ui.busy, modifier = Modifier.fillMaxWidth().padding(top = 8.dp).height(48.dp)) {
+                if (canRestore && !localMode) OutlinedButton(
+                    onClick = vm::restoreCloudBackup,
+                    enabled = !ui.busy && ui.cloudProChecked && ui.cloudProEnabled,
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp).height(48.dp),
+                ) {
                     Text(stringResource(R.string.cloud_restore_backup))
                 }
             }
             if (ui.busy) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
 
-            item {
-                HorizontalDivider(Modifier.padding(vertical = 4.dp))
-                Text(stringResource(R.string.auto_backups_title), style = MaterialTheme.typography.titleMedium)
-                Text(stringResource(R.string.auto_backups_hint), style = MaterialTheme.typography.bodySmall)
-            }
-            if (ui.autoBackups.isEmpty()) item { Text(stringResource(R.string.auto_backups_none), style = MaterialTheme.typography.bodyMedium) }
-            else items(ui.autoBackups, key = { it.file.name }) { b ->
-                ListItem(
-                    modifier = Modifier.clickable(enabled = !ui.busy && canRestore) { restoreFromAuto = b },
-                    headlineContent = { Text(DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(b.createdAt))) },
-                    supportingContent = { Text("${b.sizeBytes / 1024} KB") },
-                    trailingContent = { if (canRestore) TextButton(onClick = { restoreFromAuto = b }) { Text(stringResource(R.string.restore_action)) } },
-                )
-                HorizontalDivider()
+            if (settings.storageMode == StorageMode.LOCAL) {
+                item {
+                    HorizontalDivider(Modifier.padding(vertical = 4.dp))
+                    Text(stringResource(R.string.auto_backups_title), style = MaterialTheme.typography.titleMedium)
+                    Text(stringResource(R.string.auto_backups_hint), style = MaterialTheme.typography.bodySmall)
+                }
+                if (ui.autoBackups.isEmpty()) item { Text(stringResource(R.string.auto_backups_none), style = MaterialTheme.typography.bodyMedium) }
+                else items(ui.autoBackups, key = { it.file.name }) { b ->
+                    ListItem(
+                        modifier = Modifier.clickable(enabled = !ui.busy && canRestore) { restoreFromAuto = b },
+                        headlineContent = { Text(DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(b.createdAt))) },
+                        supportingContent = { Text("${b.sizeBytes / 1024} KB") },
+                        trailingContent = { if (canRestore) TextButton(onClick = { restoreFromAuto = b }) { Text(stringResource(R.string.restore_action)) } },
+                    )
+                    HorizontalDivider()
+                }
             }
         }
     }

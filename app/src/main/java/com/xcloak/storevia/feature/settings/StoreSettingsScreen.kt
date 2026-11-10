@@ -26,6 +26,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import com.xcloak.storevia.R
 import com.xcloak.storevia.core.util.GstStates
+import com.xcloak.storevia.core.ui.LoadingState
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -46,7 +47,22 @@ fun StoreSettingsScreen(
             title = { Text(stringResource(R.string.store_settings)) },
             navigationIcon = { IconButton(onClick = onBack) { Icon(Icons.AutoMirrored.Filled.ArrowBack, stringResource(R.string.back)) } },
         )
-        if (!ui.loaded) return@Column
+        if (!ui.loaded) {
+            if (ui.loading) {
+                LoadingState(Modifier.fillMaxSize())
+            } else {
+                Column(
+                    Modifier.fillMaxSize().padding(24.dp),
+                    verticalArrangement = Arrangement.Center,
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Text(stringResource(ui.loadError ?: R.string.err_store_unavailable), color = MaterialTheme.colorScheme.error)
+                    Spacer(Modifier.height(12.dp))
+                    OutlinedButton(onClick = vm::refresh) { Text(stringResource(R.string.retry)) }
+                }
+            }
+            return@Column
+        }
 
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
             Text(stringResource(R.string.store_settings_hint), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -64,6 +80,14 @@ fun StoreSettingsScreen(
                 Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
                     Text(stringResource(R.string.branch_locations), style = MaterialTheme.typography.titleMedium)
                     Text(stringResource(R.string.branch_shared_catalog_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    if (branchUi.cloudMode) {
+                        Text(stringResource(R.string.cloud_branch_device_selection_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    if (branchUi.loading) LoadingState(Modifier.fillMaxWidth().height(100.dp))
+                    branchUi.loadError?.let { error ->
+                        Text(stringResource(error), color = MaterialTheme.colorScheme.error)
+                        OutlinedButton(onClick = branchVm::refresh) { Text(stringResource(R.string.retry)) }
+                    }
                     branchUi.branches.forEach { branch ->
                         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
                             RadioButton(
@@ -104,18 +128,26 @@ fun StoreSettingsScreen(
                             dismissButton = { TextButton(onClick = { editingBranch = null }) { Text(stringResource(R.string.cancel)) } },
                         )
                     }
-                    OutlinedTextField(
-                        value = branchUi.name,
-                        onValueChange = branchVm::setName,
-                        singleLine = true,
-                        label = { Text(stringResource(R.string.branch_name)) },
-                        isError = branchUi.error != null,
-                        supportingText = branchUi.error?.let { res -> { Text(stringResource(res)) } },
-                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    OutlinedButton(onClick = branchVm::add, modifier = Modifier.fillMaxWidth()) {
-                        Text(stringResource(R.string.branch_add))
+                    branchUi.error?.let { error ->
+                        Text(stringResource(error), color = MaterialTheme.colorScheme.error)
+                    }
+                    if (!branchUi.cloudMode || !branchUi.loading) {
+                        OutlinedTextField(
+                            value = branchUi.name,
+                            onValueChange = branchVm::setName,
+                            singleLine = true,
+                            label = { Text(stringResource(R.string.branch_name)) },
+                            isError = branchUi.error != null,
+                            keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Words),
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        OutlinedButton(
+                            onClick = branchVm::add,
+                            modifier = Modifier.fillMaxWidth(),
+                            enabled = !branchUi.loading,
+                        ) {
+                            Text(stringResource(R.string.branch_add))
+                        }
                     }
                 }
             }
@@ -132,7 +164,21 @@ fun StoreSettingsScreen(
                     Text(stringResource(R.string.section_billing), style = MaterialTheme.typography.titleMedium)
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         Box(Modifier.weight(1f)) { Field(f.invoicePrefix, { v -> vm.update { copy(invoicePrefix = v) } }, R.string.field_invoice_prefix, errText(ui.errors["prefix"]), capitalize = true) }
-                        Box(Modifier.weight(1f)) { Field(f.nextInvoiceNo, { v -> vm.update { copy(nextInvoiceNo = v) } }, R.string.field_next_invoice, errText(ui.errors["next"]), KeyboardType.Number) }
+                        Box(Modifier.weight(1f)) {                         Field(
+                            f.nextInvoiceNo,
+                            { v -> vm.update { copy(nextInvoiceNo = v) } },
+                            R.string.field_next_invoice,
+                            errText(ui.errors["next"]),
+                            KeyboardType.Number,
+                            readOnly = ui.cloudMode,
+                        ) }
+                        if (ui.cloudMode) {
+                            Text(
+                                stringResource(R.string.cloud_invoice_counter_hint),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
                     Field(f.deviceSeries, { v -> vm.update { copy(deviceSeries = v.uppercase()) } }, R.string.field_device_series, errText(ui.errors["deviceSeries"]), capitalize = true)
                     Text(stringResource(R.string.device_series_hint), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -147,8 +193,21 @@ fun StoreSettingsScreen(
             }
         }
         Surface(shadowElevation = 6.dp, color = MaterialTheme.colorScheme.surface) {
-            Button(onClick = vm::save, modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp).height(52.dp)) {
+            Column {
+                ui.saveError?.let { error ->
+                    Text(
+                        stringResource(error),
+                        Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+                Button(
+                    onClick = vm::save,
+                    enabled = !ui.loading,
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp).height(52.dp),
+                ) {
                 Text(stringResource(R.string.save))
+                }
             }
         }
     }
@@ -158,9 +217,10 @@ fun StoreSettingsScreen(
 internal fun Field(
     value: String, onChange: (String) -> Unit, label: Int, error: String? = null,
     keyboard: KeyboardType = KeyboardType.Text, capitalize: Boolean = false,
+    readOnly: Boolean = false,
 ) {
     OutlinedTextField(
-        value = value, onValueChange = onChange, singleLine = true, label = { Text(stringResource(label)) },
+        value = value, onValueChange = onChange, singleLine = true, readOnly = readOnly, label = { Text(stringResource(label)) },
         isError = error != null, supportingText = error?.let { { Text(it) } },
         keyboardOptions = KeyboardOptions(keyboardType = keyboard, capitalization = if (capitalize) KeyboardCapitalization.Characters else KeyboardCapitalization.None),
         modifier = Modifier.fillMaxWidth(),

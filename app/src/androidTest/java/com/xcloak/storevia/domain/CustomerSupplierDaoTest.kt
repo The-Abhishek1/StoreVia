@@ -91,6 +91,44 @@ class CustomerSupplierDaoTest {
     }
 
     @Test
+    fun customerSalesHistoryIncludesPaidAndReturnedBillsWithoutLedgerEntries() = runBlocking {
+        val customer = CustomerEntity(id = "history-customer", name = "Customer")
+        db.customerDao().insert(customer)
+        val paidCashSale = SaleEntity(
+            id = "history-paid", invoiceNo = "INV-PAID", customerId = customer.id,
+            subtotalPaise = 1_000, discountPaise = 0, taxPaise = 0, roundOffPaise = 0,
+            totalPaise = 1_000, paidPaise = 1_000, createdAt = 2L,
+        )
+        val returnedSale = SaleEntity(
+            id = "history-returned", invoiceNo = "INV-RETURNED", customerId = customer.id,
+            status = SaleStatus.PARTIAL_RETURN,
+            subtotalPaise = 2_000, discountPaise = 0, taxPaise = 0, roundOffPaise = 0,
+            totalPaise = 2_000, paidPaise = 1_000, returnedPaise = 500, createdAt = 1L,
+        )
+        val cancelledSale = paidCashSale.copy(
+            id = "history-cancelled", invoiceNo = "INV-CANCELLED",
+            status = SaleStatus.CANCELLED, createdAt = 0L,
+        )
+        db.saleDao().insertSale(paidCashSale)
+        db.saleDao().insertSale(returnedSale)
+        db.saleDao().insertSale(cancelledSale)
+        db.saleDao().insertSale(
+            paidCashSale.copy(id = "other-customer-sale", invoiceNo = "INV-OTHER", customerId = "other-customer"),
+        )
+        db.saleDao().insertSale(
+            paidCashSale.copy(id = "walk-in-sale", invoiceNo = "INV-WALKIN", customerId = null),
+        )
+
+        val history = db.saleDao().observeCustomerSales(customer.id).first()
+
+        assertEquals(listOf("history-paid", "history-returned", "history-cancelled"), history.map { it.id })
+        assertEquals(1_000L, history.first().paidPaise)
+        assertEquals(SaleStatus.PARTIAL_RETURN, history[1].status)
+        assertEquals(500L, history[1].returnedPaise)
+        assertEquals(emptyList<CustomerLedgerEntity>(), db.customerDao().observeLedger(customer.id).first())
+    }
+
+    @Test
     fun payingSupplierReducesPayableBalance() = runBlocking {
         val supplier = SupplierEntity(id = "payment-supplier", name = "Supplier")
         db.supplierDao().insert(supplier)
@@ -107,6 +145,7 @@ class CustomerSupplierDaoTest {
         assertEquals(SupplierLedgerType.PAYMENT, payment.type)
         assertEquals(-400L, payment.amountPaise)
         assertEquals(PaymentMethod.CARD, payment.method)
+        assertEquals("SUPPLIER_BALANCE", payment.refType)
     }
 
     @Test

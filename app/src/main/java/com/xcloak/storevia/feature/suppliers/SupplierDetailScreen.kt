@@ -4,11 +4,14 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -31,6 +34,7 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
 private val DATE = DateTimeFormatter.ofPattern("d MMM yyyy")
+private fun Long.asSupplierDate() = Instant.ofEpochMilli(this).atZone(ZoneId.systemDefault()).format(DATE)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -80,10 +84,20 @@ fun SupplierDetailScreen(
             d.supplier.phone?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
             d.supplier.gstin?.let { Text(stringResource(R.string.gstin_label, it), style = MaterialTheme.typography.bodySmall) }
 
-            if (can(Permission.MANAGE_PURCHASES)) {
+            if (d.cloudLimited) {
+                Text(
+                    "Cloud purchase entry and supplier payments are unavailable until their stock-safe server transactions are implemented.",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
+            if (can(Permission.MANAGE_PURCHASES) && !d.cloudLimited) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     Button(onClick = { onNewPurchase(d.supplier.id) }, modifier = Modifier.weight(1f)) { Text(stringResource(R.string.new_purchase)) }
-                    OutlinedButton(onClick = { paying = true }, enabled = d.balancePaise > 0, modifier = Modifier.weight(1f)) { Text(stringResource(R.string.pay_supplier)) }
+                    OutlinedButton(
+                        onClick = { paying = true },
+                        enabled = d.balancePaise > 0 && (d.unpaidPurchases.isNotEmpty() || d.unallocatedBalancePaise > 0),
+                        modifier = Modifier.weight(1f),
+                    ) { Text(stringResource(R.string.pay_supplier)) }
                 }
             }
             if (can(Permission.MANAGE_PURCHASES)) {
@@ -104,7 +118,7 @@ fun SupplierDetailScreen(
                         SupplierLedgerType.ADJUSTMENT -> R.string.sledger_adjustment
                     }
                     ListItem(
-                        modifier = if (e.refType == "PURCHASE" && e.refId != null) Modifier.clickable { onOpenPurchase(e.refId) } else Modifier,
+                        modifier = if (!d.cloudLimited && e.refType == "PURCHASE" && e.refId != null) Modifier.clickable { onOpenPurchase(e.refId) } else Modifier,
                         headlineContent = { Text(stringResource(label)) },
                         supportingContent = {
                             Text(Instant.ofEpochMilli(e.createdAt).atZone(ZoneId.systemDefault()).format(DATE) + " · " +
@@ -123,16 +137,29 @@ fun SupplierDetailScreen(
         }
     }
 
-    if (paying && d != null) PayDialog(d.balancePaise, vm) { paying = false }
+    if (paying && d != null) PayDialog(d, vm) { paying = false }
     if (oldBalance) OldPayableDialog(vm) { oldBalance = false }
     if (editing && d != null && can(Permission.MANAGE_PURCHASES)) {
         SupplierFormDialog(d.supplier, onSave = { n, p, g -> vm.update(n, p, g) }, onDismiss = { editing = false })
     }
 }
 
+private const val UNALLOCATED_PAYMENT_TARGET = "supplier-balance"
+
 @Composable
-private fun PayDialog(balancePaise: Long, vm: SupplierDetailViewModel, onDismiss: () -> Unit) {
-    var amount by remember { mutableStateOf(Parsing.paiseToInput(balancePaise)) }
+private fun PayDialog(detail: SupplierDetailUi, vm: SupplierDetailViewModel, onDismiss: () -> Unit) {
+    val firstPurchase = detail.unpaidPurchases.firstOrNull()
+    var selectedTarget by rememberSaveable { mutableStateOf(firstPurchase?.id ?: UNALLOCATED_PAYMENT_TARGET) }
+    val selectedPurchase = detail.unpaidPurchases.firstOrNull { it.id == selectedTarget }
+    val availablePaise = if (selectedTarget == UNALLOCATED_PAYMENT_TARGET) {
+        minOf(detail.balancePaise, detail.unallocatedBalancePaise).coerceAtLeast(0)
+    } else {
+        minOf(
+            detail.balancePaise,
+            (selectedPurchase?.totalPaise ?: 0L) - (selectedPurchase?.paidPaise ?: 0L),
+        ).coerceAtLeast(0)
+    }
+    var amount by remember { mutableStateOf(Parsing.paiseToInput(availablePaise)) }
     var method by remember { mutableStateOf(PaymentMethod.CASH) }
     var error by remember { mutableStateOf<Int?>(null) }
     var saving by remember { mutableStateOf(false) }
@@ -141,7 +168,69 @@ private fun PayDialog(balancePaise: Long, vm: SupplierDetailViewModel, onDismiss
         onDismissRequest = { if (!saving) onDismiss() },
         title = { Text(stringResource(R.string.pay_supplier)) },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(
+                modifier = Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(stringResource(R.string.supplier_payment_allocate_hint), style = MaterialTheme.typography.bodySmall)
+                detail.unpaidPurchases.forEach { purchase ->
+                    val duePaise = (purchase.totalPaise - purchase.paidPaise).coerceAtLeast(0)
+                    Row(
+                        modifier = Modifier.fillMaxWidth().clickable {
+                            selectedTarget = purchase.id
+                            amount = Parsing.paiseToInput(minOf(detail.balancePaise, duePaise).coerceAtLeast(0))
+                            error = null
+                        },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = selectedTarget == purchase.id, onClick = {
+                            selectedTarget = purchase.id
+                            amount = Parsing.paiseToInput(minOf(detail.balancePaise, duePaise).coerceAtLeast(0))
+                            error = null
+                        })
+                        Column(Modifier.weight(1f)) {
+                            Text(purchase.invoiceNo ?: stringResource(R.string.purchase_title))
+                            Text(
+                                listOfNotNull(purchase.purchaseDate.asSupplierDate(), purchase.branchName).joinToString(" · "),
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            Text(
+                                stringResource(
+                                    R.string.supplier_payment_purchase_due,
+                                    Money(duePaise).format(),
+                                    Money(minOf(detail.balancePaise, duePaise).coerceAtLeast(0)).format(),
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
+                }
+                if (detail.unallocatedBalancePaise > 0) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth().clickable {
+                            selectedTarget = UNALLOCATED_PAYMENT_TARGET
+                            amount = Parsing.paiseToInput(minOf(detail.balancePaise, detail.unallocatedBalancePaise).coerceAtLeast(0))
+                            error = null
+                        },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(selected = selectedTarget == UNALLOCATED_PAYMENT_TARGET, onClick = {
+                            selectedTarget = UNALLOCATED_PAYMENT_TARGET
+                            amount = Parsing.paiseToInput(minOf(detail.balancePaise, detail.unallocatedBalancePaise).coerceAtLeast(0))
+                            error = null
+                        })
+                        Column(Modifier.weight(1f)) {
+                            Text(stringResource(R.string.supplier_unallocated_balance))
+                            Text(
+                                stringResource(
+                                    R.string.supplier_payment_available,
+                                    Money(minOf(detail.balancePaise, detail.unallocatedBalancePaise)).format(),
+                                ),
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                    }
+                }
                 OutlinedTextField(amount, { amount = it; error = null }, singleLine = true, label = { Text(stringResource(R.string.field_amount)) },
                     isError = error != null, supportingText = error?.let { { Text(stringResource(it)) } },
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
@@ -153,13 +242,15 @@ private fun PayDialog(balancePaise: Long, vm: SupplierDetailViewModel, onDismiss
         },
         confirmButton = {
             TextButton(
-                enabled = !saving,
+                enabled = !saving && availablePaise > 0 &&
+                    (selectedTarget == UNALLOCATED_PAYMENT_TARGET && detail.unallocatedBalancePaise > 0 || selectedPurchase != null),
                 onClick = {
                     if (!saving) {
                         saving = true
                         scope.launch {
                             try {
-                                val e = vm.pay(amount, method)
+                                val purchaseId = selectedTarget.takeUnless { it == UNALLOCATED_PAYMENT_TARGET }
+                                val e = vm.pay(amount, method, purchaseId)
                                 if (e == null) onDismiss() else error = e
                             } finally {
                                 saving = false

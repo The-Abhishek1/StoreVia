@@ -32,6 +32,7 @@ fun AuditAction.label(): String = name.lowercase().replace('_', ' ').replaceFirs
 @Composable
 fun AuditScreen(onBack: () -> Unit, vm: AuditViewModel = hiltViewModel()) {
     val rows by vm.rows.collectAsStateWithLifecycle()
+    val loadError by vm.loadError.collectAsStateWithLifecycle()
     var query by remember { mutableStateOf("") }
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
@@ -45,6 +46,13 @@ fun AuditScreen(onBack: () -> Unit, vm: AuditViewModel = hiltViewModel()) {
         val list = rows
         when {
             list == null -> LoadingState(Modifier.padding(padding))
+            loadError != null -> Column(
+                Modifier.padding(padding).fillMaxSize().padding(32.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(stringResource(loadError!!), color = MaterialTheme.colorScheme.error)
+            }
             list.isEmpty() -> Column(Modifier.padding(padding).fillMaxSize().padding(32.dp), verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
                 Text(stringResource(R.string.audit_empty), style = MaterialTheme.typography.titleMedium)
                 Spacer(Modifier.height(8.dp))

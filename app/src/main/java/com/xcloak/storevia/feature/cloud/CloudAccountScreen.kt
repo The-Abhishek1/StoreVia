@@ -58,13 +58,12 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.xcloak.storevia.R
+import com.xcloak.storevia.data.prefs.StorageMode
 
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun CloudAccountScreen(
     onBack: () -> Unit,
-    adminOnly: Boolean = false,
-    onAdminSignOut: (() -> Unit)? = null,
     lockCreateAccount: Boolean = false,
     initialCreateAccount: Boolean = false,
     joinOnly: Boolean = false,
@@ -74,21 +73,17 @@ fun CloudAccountScreen(
     val ui by vm.ui.collectAsStateWithLifecycle()
     val settings by vm.settings.collectAsStateWithLifecycle()
     val activity = LocalContext.current as? Activity
-    val adminSignOutAction: () -> Unit = onAdminSignOut ?: {
-        vm.signOut()
-        Unit
-    }
     var email by rememberSaveable { mutableStateOf("") }
     var password by rememberSaveable { mutableStateOf("") }
     var confirmPassword by rememberSaveable { mutableStateOf("") }
     var passwordVisible by rememberSaveable { mutableStateOf(false) }
     var confirmPasswordVisible by rememberSaveable { mutableStateOf(false) }
-    var createAccount by rememberSaveable(initialCreateAccount, adminOnly, lockCreateAccount) {
+    var createAccount by rememberSaveable(initialCreateAccount, lockCreateAccount) {
         mutableStateOf(initialCreateAccount)
     }
 
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { vm.refreshSession() }
-    androidx.compose.runtime.LaunchedEffect(adminOnly, lockCreateAccount, initialCreateAccount, joinOnly, createOnly) {
+    androidx.compose.runtime.LaunchedEffect(lockCreateAccount, initialCreateAccount, joinOnly, createOnly) {
         vm.clearMessageForAuthentication()
     }
 
@@ -124,7 +119,6 @@ fun CloudAccountScreen(
                         Text(
                             stringResource(
                                 when {
-                                    adminOnly -> R.string.platform_admin_login_heading
                                     createAccount -> R.string.cloud_create_heading
                                     else -> R.string.cloud_login_heading
                                 },
@@ -134,7 +128,6 @@ fun CloudAccountScreen(
                         Text(
                             stringResource(
                                 when {
-                                    adminOnly -> R.string.platform_admin_login_hint
                                     createAccount -> R.string.cloud_create_hint
                                     else -> R.string.cloud_login_hint
                                 },
@@ -181,7 +174,7 @@ fun CloudAccountScreen(
                                     }
                                 }
                             }
-                            if (!adminOnly && !lockCreateAccount) {
+                            if (!lockCreateAccount) {
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     FilterChip(selected = !createAccount, onClick = { createAccount = false }, label = { Text(stringResource(R.string.cloud_mode_sign_in)) })
                                     FilterChip(selected = createAccount, onClick = { createAccount = true }, label = { Text(stringResource(R.string.cloud_mode_sign_up)) })
@@ -361,34 +354,20 @@ fun CloudAccountScreen(
                 } else {
                     Text(stringResource(R.string.cloud_connected_as, ui.accountIdentifier.orEmpty()), style = MaterialTheme.typography.titleMedium)
                 }
-                if (adminOnly) {
-                    if (!ui.platformAdmin) {
-                        Text(stringResource(R.string.platform_admin_access_denied), color = MaterialTheme.colorScheme.error)
-                    }
-                    OutlinedButton(
-                        onClick = adminSignOutAction,
-                        enabled = !ui.busy,
-                        modifier = Modifier.fillMaxWidth(),
-                    ) {
-                        Text(stringResource(R.string.cloud_sign_out))
-                    }
-                } else {
                 if (!createOnly) ui.plan?.let { plan ->
+                    val hasActivePro = plan.hasActiveProAccess()
                     val planLabel = stringResource(
-                        when (plan.plan.lowercase()) {
-                            "pro" -> R.string.cloud_plan_pro
-                            else -> R.string.cloud_plan_free
-                        },
+                        if (hasActivePro) R.string.cloud_plan_pro else R.string.cloud_plan_free,
                     )
                     Card(Modifier.fillMaxWidth()) {
                         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                             Text(stringResource(R.string.cloud_plan_status, planLabel, plan.status), style = MaterialTheme.typography.titleSmall)
-                            if (plan.plan.equals("pro", ignoreCase = true) && plan.expiresAt != null) {
+                            if (hasActivePro && plan.expiresAt != null) {
                                 Text(stringResource(R.string.cloud_plan_expires, plan.expiresAt.substringBefore('T')), style = MaterialTheme.typography.bodySmall)
                             }
                         }
                     }
-                    if (!plan.plan.equals("pro", ignoreCase = true)) {
+                    if (!hasActivePro) {
                         Text(
                             ui.proPrice?.let { stringResource(R.string.cloud_pro_offer, it, ui.proBillingPeriod.orEmpty()) }
                                 ?: stringResource(R.string.cloud_pro_loading),
@@ -397,7 +376,8 @@ fun CloudAccountScreen(
                         Text(stringResource(R.string.cloud_pro_renewal_note), style = MaterialTheme.typography.bodySmall)
                         Button(
                             onClick = { activity?.let(vm::buyPro) },
-                            enabled = ui.billingReady && !ui.billingBusy && activity != null && settings.cloudStoreId != null,
+                            enabled = ui.billingReady && !ui.billingBusy && activity != null &&
+                                settings.cloudStoreId != null && settings.storageMode != StorageMode.LOCAL,
                             modifier = Modifier.fillMaxWidth().height(52.dp),
                         ) { Text(stringResource(R.string.cloud_upgrade_pro)) }
                     }
@@ -407,8 +387,19 @@ fun CloudAccountScreen(
                     if (connectedStoreId != null && !joinOnly) {
                         val storeId = connectedStoreId
                         Text(stringResource(R.string.cloud_store_binding, storeId, settings.cloudRole ?: "MEMBER"))
-                        Button(onClick = vm::syncNow, enabled = !ui.busy, modifier = Modifier.fillMaxWidth().height(52.dp)) {
-                            Text(stringResource(R.string.cloud_sync_now))
+                        if (settings.storageMode == StorageMode.LOCAL) {
+                            Text(
+                                stringResource(R.string.entry_local_only_banner),
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Button(onClick = vm::connect, enabled = !ui.busy, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+                                Text(stringResource(R.string.cloud_connect))
+                            }
+                        } else {
+                            Button(onClick = vm::syncNow, enabled = !ui.busy, modifier = Modifier.fillMaxWidth().height(52.dp)) {
+                                Text(stringResource(R.string.cloud_sync_now))
+                            }
                         }
                     } else {
                         Text(stringResource(R.string.cloud_connection_ready), style = MaterialTheme.typography.bodyMedium)
@@ -424,7 +415,6 @@ fun CloudAccountScreen(
                     OutlinedButton(onClick = vm::signOut, enabled = !ui.busy, modifier = Modifier.fillMaxWidth()) {
                         Text(stringResource(R.string.cloud_sign_out))
                     }
-                }
                 }
             }
             if (ui.busy || ui.billingBusy) Text(stringResource(R.string.working), style = MaterialTheme.typography.bodySmall)

@@ -127,8 +127,11 @@ class CloudAccountViewModel @Inject constructor(
                 billingClient.queryProductDetailsAsync(
                     QueryProductDetailsParams.newBuilder().setProductList(listOf(product)).build(),
                 ) { queryResult, response ->
-                    val details = response.firstOrNull()
-                    val recurringPhase = details?.subscriptionOfferDetails?.firstOrNull()?.pricingPhases?.pricingPhaseList?.lastOrNull()
+                    val details = response.productDetailsList.firstOrNull()
+                    val recurringPhase = details?.subscriptionOfferDetails
+                        ?.flatMap { it.pricingPhases.pricingPhaseList }
+                        ?.lastOrNull { it.recurrenceMode == com.android.billingclient.api.ProductDetails.RecurrenceMode.INFINITE_RECURRING }
+                        ?: details?.subscriptionOfferDetails?.firstOrNull()?.pricingPhases?.pricingPhaseList?.lastOrNull()
                     val price = recurringPhase?.formattedPrice
                     val billingPeriod = recurringPhase?.billingPeriod?.let(::billingPeriodLabel)
                     proProduct = details

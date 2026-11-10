@@ -4,6 +4,7 @@ Generates supabase/schema.sql.
 
 The synced tables are generated FROM the Kotlin entities and SyncTables.kt, so the phone and the server can't drift
 apart: same columns (snake_case), same kinds (mutable / append-only), same local-only exclusions.
+SQL files in supabase/migrations are appended to the generated schema.
 Run from the project root:  python3 supabase/generate_schema.py
 """
 import re, pathlib
@@ -17,6 +18,7 @@ def snake(n): return "".join("_" + c.lower() if c.isupper() else c for c in n)
 
 # ---- which tables sync, how, and what stays local (read from SyncTables.kt)
 tables = []
+dependencies_by_table = {}
 def balanced(src, start):
     """Text of the call whose opening '(' is at src[start], matching nested parentheses."""
     depth = 0
@@ -35,28 +37,82 @@ for m in re.finditer(r'SyncTable\(', sync_src):
     lo = re.search(r'localOnly\s*=\s*setOf\(([^)]*)\)', body)
     local = set(re.findall(r'"(\w+)"', lo.group(1))) if lo else set()
     tables.append((head.group(1), head.group(2), local))
+    deps = re.search(r'dependsOn\s*=\s*setOf\(([^)]*)\)', body)
+    dependencies_by_table[head.group(1)] = set(re.findall(r'"(\w+)"', deps.group(1))) if deps else set()
 
 # ---- columns of every entity
 cols_by_table = {}
+entity_by_table = {}
+table_by_entity = {}
+foreign_keys_by_table = {}
 for m in re.finditer(r'@Entity\((.*?)\)\s*data class (\w+)\(\n(.*?)\n\)', entities_src, re.S):
     tname = re.search(r'tableName\s*=\s*"(\w+)"', m.group(1))
     if not tname: continue
+    table_name = tname.group(1)
     cols = []
     for line in m.group(3).splitlines():
-        fm = re.match(r'\s*(?:@\w+\s+)*val (\w+):\s*([\w.]+\??)', line)
-        if fm: cols.append((fm.group(1), fm.group(2)))
-    cols_by_table[tname.group(1)] = cols
+        fm = re.match(r'\s*(?:@\w+\s+)*val (\w+):\s*([\w.]+\??)(?:\s*=\s*(.*?))?,?\s*$', line)
+        if fm: cols.append((fm.group(1), fm.group(2), fm.group(3)))
+    cols_by_table[table_name] = cols
+    entity_by_table[table_name] = (m.group(1), m.group(2))
+    table_by_entity[m.group(2)] = table_name
+
+for table_name, (annotation, _) in entity_by_table.items():
+    foreign_keys = []
+    for parent_class, parent_cols, child_cols, options in re.findall(
+        r'ForeignKey\((\w+)::class,\s*\[([^\]]*)\],\s*\[([^\]]*)\](.*?)\)',
+        annotation,
+        re.S,
+    ):
+        parent_table = table_by_entity.get(parent_class)
+        if parent_table is None:
+            raise SystemExit(f"unknown foreign-key parent {parent_class} for {table_name}")
+        parent_columns = re.findall(r'"(\w+)"', parent_cols)
+        child_columns = re.findall(r'"(\w+)"', child_cols)
+        if len(parent_columns) != len(child_columns):
+            raise SystemExit(f"mismatched foreign-key columns for {table_name}")
+        on_delete = re.search(r'onDelete\s*=\s*ForeignKey\.(CASCADE|RESTRICT|SET_NULL|NO_ACTION)', options)
+        foreign_keys.append((parent_table, child_columns, parent_columns, on_delete.group(1) if on_delete else "NO_ACTION"))
+    foreign_keys_by_table[table_name] = foreign_keys
+
+table_order = {name: index for index, (name, _, _) in enumerate(tables)}
+for table_name, _, _ in tables:
+    for dependency in dependencies_by_table.get(table_name, set()):
+        if dependency in table_order and table_order[dependency] >= table_order[table_name]:
+            raise SystemExit(f"{dependency} must be listed before dependent sync table {table_name}")
+for table_name, foreign_keys in foreign_keys_by_table.items():
+    for parent_table, _, _, _ in foreign_keys:
+        if table_name in table_order and parent_table in table_order and table_order[parent_table] >= table_order[table_name]:
+            raise SystemExit(f"{parent_table} must be listed before foreign-key child {table_name}")
 
 def sql_type(t):
     t = t.rstrip("?")
     return {"Long": "bigint", "Int": "integer", "Boolean": "integer"}.get(t, "text")   # booleans travel as 0/1; enums, dates, strings as text
+
+def sql_default(t, expression):
+    if expression is None or expression == "null":
+        return None
+    expression = expression.strip()
+    if t == "Boolean":
+        return "1" if expression == "true" else "0" if expression == "false" else None
+    if t in {"Long", "Int"}:
+        if re.fullmatch(r"-?\d+[lL]?", expression):
+            return expression.rstrip("lL")
+        if "System.currentTimeMillis()" in expression or re.fullmatch(r"\w+", expression):
+            return "(extract(epoch from clock_timestamp()) * 1000)::bigint"
+    if expression.startswith('"') and expression.endswith('"'):
+        return "'" + expression[1:-1].replace("'", "''") + "'"
+    enum_value = re.fullmatch(r"[\w.]+\.([A-Z][A-Z0-9_]*)", expression)
+    if enum_value:
+        return "'" + enum_value.group(1) + "'"
+    return None
 
 OWNER, MANAGER, CASHIER = "array['OWNER']", "array['OWNER','MANAGER']", "array['OWNER','MANAGER','CASHIER']"
 WRITE_ROLES = {}
 for t in ["store", "staff"]: WRITE_ROLES[t] = OWNER
 for t in ["branches", "units", "categories", "products", "product_barcodes", "batches", "suppliers", "purchases", "purchase_lines",
           "supplier_ledger", "sale_returns", "sale_return_lines", "recipe_components", "serial_numbers"]: WRITE_ROLES[t] = MANAGER
-for t in ["customers", "sales", "sale_lines", "payments", "stock_movements", "customer_ledger", "audit_log"]: WRITE_ROLES[t] = CASHIER
+for t in ["customers", "held_carts", "sales", "sale_lines", "payments", "stock_movements", "customer_ledger", "audit_log"]: WRITE_ROLES[t] = CASHIER
 
 out = []
 w = out.append
@@ -278,7 +334,8 @@ begin
 end;
 $$;
 
--- The shop the signed-in person belongs to (if any), their role, and its configured store type.
+-- All stores the signed-in person belongs to, in stable order, with their roles and configured types.
+-- Return every membership in a stable order so clients can reconnect to their persisted selection.
 drop function if exists public.my_store();
 create function public.my_store() returns table (store_id text, role text, store_type text)
 language sql stable security definer set search_path = public as $$
@@ -286,7 +343,7 @@ language sql stable security definer set search_path = public as $$
   from public.store_members m
   left join public.platform_store_metadata meta on meta.store_id = m.store_id
   where m.user_id = auth.uid()
-  order by m.created_at limit 1;
+  order by m.created_at, m.store_id;
 $$;
 
 -- Gives this phone its invoice series. Calling again with the same device returns the same series.
@@ -379,22 +436,47 @@ for update using (
 """)
 
 for name, kind, local in tables:
-    cols = [(c, t) for c, t in cols_by_table[name] if c != "dirty" and c not in local]
+    cols = [(c, t, default) for c, t, default in cols_by_table[name] if c != "dirty" and c not in local]
     w(f"-- {name}: {kind.lower().replace('_', '-')}")
     w(f'create table if not exists public."{name}" (')
-    for c, t in cols:
+    for c, t, _ in cols:
         w(f'  "{snake(c)}" {sql_type(t)}{"" if t.endswith("?") else " not null"},')
     w("  store_id text not null,")
     w("  server_updated_at timestamptz not null default clock_timestamp(),")
+    foreign_keys = foreign_keys_by_table.get(name, [])
+    for index, (parent, child_cols, parent_cols, on_delete) in enumerate(foreign_keys):
+        child_sql = ", ".join(f'"{snake(c)}"' for c in child_cols)
+        parent_sql = ", ".join(f'"{snake(c)}"' for c in parent_cols)
+        constraint = f"{name}_{'_'.join(snake(c) for c in child_cols)}_fkey"
+        delete_clause = "" if on_delete == "NO_ACTION" else f" on delete {on_delete.lower().replace('_', ' ')}"
+        w(f'  constraint "{constraint}" foreign key ({child_sql}) references public."{parent}" ({parent_sql}){delete_clause},')
     w('  primary key ("id")')
     w(");")
-    if name == "store":
-        w('alter table public."store" add column if not exists "owner_name" text not null default \'\';')
-        w('alter table public."store" add column if not exists "city" text not null default \'\';')
-    if name == "products":
-        w('alter table public."products" add column if not exists "attributes_json" text not null default \'{}\';')
-        w('alter table public."products" add column if not exists "parent_product_id" text;')
-        w('alter table public."products" add column if not exists "variant_label" text;')
+    for child_parent, child_cols, parent_cols, on_delete in foreign_keys:
+        child_sql = ", ".join(f'"{snake(c)}"' for c in child_cols)
+        parent_sql = ", ".join(f'"{snake(c)}"' for c in parent_cols)
+        constraint = f"{name}_{'_'.join(snake(c) for c in child_cols)}_fkey"
+        delete_clause = "" if on_delete == "NO_ACTION" else f" on delete {on_delete.lower().replace('_', ' ')}"
+        w(f"""do $$
+begin
+  if not exists (
+    select 1 from pg_constraint
+    where conname = '{constraint}' and conrelid = 'public."{name}"'::regclass
+  ) then
+    alter table public."{name}" add constraint "{constraint}"
+      foreign key ({child_sql}) references public."{child_parent}" ({parent_sql}){delete_clause};
+  end if;
+end;
+$$;""")
+    for c, t, default in cols:
+        if c == "id":
+            continue
+        nullable = t.endswith("?")
+        column_default = sql_default(t, default)
+        definition = sql_type(t)
+        if not nullable and column_default is not None:
+            definition += f" not null default {column_default}"
+        w(f'alter table public."{name}" add column if not exists "{snake(c)}" {definition};')
     if name in {"batches", "stock_movements", "sales", "purchases"}:
         w(f'alter table public."{name}" add column if not exists "branch_id" text not null default \'default\';')
         w(f'update public."{name}" set "branch_id" = store_id where "branch_id" = \'default\';')
@@ -424,10 +506,15 @@ from public."store" s
 on conflict ("id") do nothing;
 """)
 
+for migration in sorted((root / "supabase/migrations").glob("*.sql")):
+    w(f"-- Included migration: {migration.name}")
+    w(migration.read_text().rstrip())
+    w("")
+
 w("notify pgrst, 'reload schema';")
 
 (root / "supabase/schema.sql").write_text("\n".join(out))
 print("tables:", len(tables), "| lines:", len(out))
 for name, kind, local in tables:
-    n = len([c for c, _ in cols_by_table[name] if c != "dirty" and c not in local])
+    n = len([c for c, _, _ in cols_by_table[name] if c != "dirty" and c not in local])
     print(f"  {name:20s} {kind:12s} {n:2d} cols" + (f"  (kept on phone: {', '.join(sorted(local))})" if local else ""))

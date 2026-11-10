@@ -68,4 +68,25 @@ class DatabaseMigrationTest {
             }
         }
     }
+
+    @Test fun version8To9MakesExistingHeldCartsSyncableWithoutDroppingThem() {
+        val name = "migration-8-9-test"
+        helper.createDatabase(name, 8).use { db ->
+            db.execSQL(
+                """INSERT INTO held_carts (
+                    id, label, customerId, interState, billDiscountPaise, itemsJson, itemCount, createdAt
+                ) VALUES ('held-1', 'Ravi', NULL, 0, 0, '[]', 0, 1234)""",
+            )
+        }
+
+        helper.runMigrationsAndValidate(name, 9, true, StorviaDatabase.MIGRATION_8_9).use { db ->
+            db.query("SELECT createdAt, updatedAt, deletedAt, dirty FROM held_carts WHERE id = 'held-1'").use { cursor ->
+                check(cursor.moveToFirst())
+                check(cursor.getLong(0) == 1234L)
+                check(cursor.getLong(1) == 1234L)
+                check(cursor.isNull(2))
+                check(cursor.getInt(3) == 1)
+            }
+        }
+    }
 }

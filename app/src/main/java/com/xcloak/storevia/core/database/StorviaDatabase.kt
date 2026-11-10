@@ -18,7 +18,7 @@ import com.xcloak.storevia.core.database.entity.*
         SupplierEntity::class, PurchaseEntity::class, PurchaseLineEntity::class, SupplierLedgerEntity::class,
         StaffEntity::class, AuditEntity::class, SyncStateEntity::class,
     ],
-    version = 8,
+    version = 9,
     exportSchema = true,
 )
 @TypeConverters(Converters::class)
@@ -125,6 +125,16 @@ abstract class StorviaDatabase : RoomDatabase() {
                 db.execSQL("CREATE INDEX IF NOT EXISTS `index_stock_movements_branchId_productId_createdAt` ON `stock_movements` (`branchId`, `productId`, `createdAt`)")
                 db.execSQL("CREATE INDEX IF NOT EXISTS `index_sales_branchId_createdAt` ON `sales` (`branchId`, `createdAt`)")
                 db.execSQL("CREATE INDEX IF NOT EXISTS `index_purchases_branchId_supplierId` ON `purchases` (`branchId`, `supplierId`)")
+            }
+
+        }
+
+        val MIGRATION_8_9 = object : Migration(8, 9) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `held_carts` ADD COLUMN `updatedAt` INTEGER NOT NULL DEFAULT 0")
+                db.execSQL("ALTER TABLE `held_carts` ADD COLUMN `deletedAt` INTEGER")
+                db.execSQL("ALTER TABLE `held_carts` ADD COLUMN `dirty` INTEGER NOT NULL DEFAULT 1")
+                db.execSQL("UPDATE `held_carts` SET `updatedAt` = `createdAt`")
             }
         }
     }

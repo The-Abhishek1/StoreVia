@@ -26,6 +26,8 @@ import com.xcloak.storevia.core.ui.LoadingState
 fun CategoriesScreen(onBack: () -> Unit, vm: CategoriesViewModel = hiltViewModel()) {
     val rows by vm.rows.collectAsStateWithLifecycle()
     val canManage by vm.canManage.collectAsStateWithLifecycle()
+    val loadError by vm.loadError.collectAsStateWithLifecycle()
+    val operationError by vm.operationError.collectAsStateWithLifecycle()
     var query by remember { mutableStateOf("") }
     var editing by remember { mutableStateOf<CategoryRow?>(null) }
     var adding by remember { mutableStateOf(false) }
@@ -33,6 +35,9 @@ fun CategoriesScreen(onBack: () -> Unit, vm: CategoriesViewModel = hiltViewModel
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
+    LaunchedEffect(loadError, operationError) {
+        (operationError ?: loadError)?.let { snackbarHostState.showSnackbar(it) }
+    }
 
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0),
@@ -52,6 +57,7 @@ fun CategoriesScreen(onBack: () -> Unit, vm: CategoriesViewModel = hiltViewModel
         when {
             !canManage -> Text(stringResource(R.string.err_permission_denied), Modifier.padding(padding).padding(24.dp))
             list == null -> LoadingState(Modifier.padding(padding))
+            loadError != null -> Text(loadError.orEmpty(), Modifier.padding(padding).padding(24.dp), color = MaterialTheme.colorScheme.error)
             else -> Column(Modifier.padding(padding).fillMaxSize()) {
                 OutlinedTextField(
                     value = query,

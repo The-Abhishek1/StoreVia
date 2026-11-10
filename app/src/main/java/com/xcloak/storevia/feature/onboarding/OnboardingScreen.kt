@@ -35,6 +35,13 @@ class OnboardingViewModel @Inject constructor(private val prefs: AppPrefs) : Vie
     val storeType get() = prefs.settings.value.storeType
 }
 
+internal fun shouldClearCloudRegistrationDetails(
+    cloudConnectRequired: Boolean,
+    clearRegistrationDetailsOnStart: Boolean,
+    loaded: Boolean,
+    step: Int,
+): Boolean = cloudConnectRequired && clearRegistrationDetailsOnStart && loaded && step == 0
+
 /** Collects business details before the cloud credentials screen or local workspace creation. */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -43,6 +50,7 @@ fun OnboardingScreen(
     onImport: () -> Unit,
     onAddProduct: () -> Unit,
     cloudConnectRequired: Boolean = false,
+    clearRegistrationDetailsOnStart: Boolean = false,
     localSetupOnly: Boolean = false,
     onCancel: () -> Unit = onFinish,
     store: StoreSettingsViewModel = hiltViewModel(),
@@ -57,8 +65,14 @@ fun OnboardingScreen(
     val context = LocalContext.current
     val features = StoreTypeConfig.of(selectedType)
 
-    LaunchedEffect(cloudConnectRequired, ui.loaded) {
-        if (cloudConnectRequired && ui.loaded && step == 0) {
+    LaunchedEffect(cloudConnectRequired, clearRegistrationDetailsOnStart, ui.loaded) {
+        if (shouldClearCloudRegistrationDetails(
+                cloudConnectRequired,
+                clearRegistrationDetailsOnStart,
+                ui.loaded,
+                step,
+            )
+        ) {
             store.clearCloudRegistrationDetails()
         }
     }
@@ -127,14 +141,31 @@ fun OnboardingScreen(
                 1 -> {
                     Text(stringResource(R.string.onboarding_step2_title), style = MaterialTheme.typography.headlineSmall)
                     Text(stringResource(R.string.onboarding_step2_body), style = MaterialTheme.typography.bodyLarge)
-                    Field(f.name, { v -> store.update { copy(name = v) } }, R.string.field_store_name, err(ui.errors["name"]))
-                    Field(f.ownerName, { v -> store.update { copy(ownerName = v) } }, R.string.field_owner_name_required, err(ui.errors["ownerName"]))
-                    Field(f.phone, { v -> store.update { copy(phone = v) } }, R.string.field_mobile_required, err(ui.errors["phone"]), keyboard = androidx.compose.ui.text.input.KeyboardType.Phone)
-                    Field(f.address, { v -> store.update { copy(address = v) } }, R.string.field_address_required, err(ui.errors["address"]))
-                    Field(f.city, { v -> store.update { copy(city = v) } }, R.string.field_city_required, err(ui.errors["city"]))
-                    StateDropdown(f.stateCode, { code -> store.update { copy(stateCode = code) } }, err(ui.errors["stateCode"]))
-                    Field(f.gstin, { v -> store.update { copy(gstin = v.uppercase()) } }, R.string.field_gstin, err(ui.errors["gstin"]), capitalize = true)
-                    Text(stringResource(R.string.gstin_hint), style = MaterialTheme.typography.bodySmall)
+                    when {
+                        ui.loading -> CircularProgressIndicator()
+                        !ui.loaded -> {
+                            Text(
+                                stringResource(ui.loadError ?: R.string.err_store_unavailable),
+                                color = MaterialTheme.colorScheme.error,
+                            )
+                            OutlinedButton(onClick = store::refresh) {
+                                Text(stringResource(R.string.retry))
+                            }
+                        }
+                        else -> {
+                            Field(f.name, { v -> store.update { copy(name = v) } }, R.string.field_store_name, err(ui.errors["name"]))
+                            Field(f.ownerName, { v -> store.update { copy(ownerName = v) } }, R.string.field_owner_name_required, err(ui.errors["ownerName"]))
+                            Field(f.phone, { v -> store.update { copy(phone = v) } }, R.string.field_mobile_required, err(ui.errors["phone"]), keyboard = androidx.compose.ui.text.input.KeyboardType.Phone)
+                            Field(f.address, { v -> store.update { copy(address = v) } }, R.string.field_address_required, err(ui.errors["address"]))
+                            Field(f.city, { v -> store.update { copy(city = v) } }, R.string.field_city_required, err(ui.errors["city"]))
+                            StateDropdown(f.stateCode, { code -> store.update { copy(stateCode = code) } }, err(ui.errors["stateCode"]))
+                            Field(f.gstin, { v -> store.update { copy(gstin = v.uppercase()) } }, R.string.field_gstin, err(ui.errors["gstin"]), capitalize = true)
+                            Text(stringResource(R.string.gstin_hint), style = MaterialTheme.typography.bodySmall)
+                            ui.saveError?.let { error ->
+                                Text(stringResource(error), color = MaterialTheme.colorScheme.error)
+                            }
+                        }
+                    }
                 }
                 else -> {
                     Text(stringResource(R.string.onboarding_step3_title), style = MaterialTheme.typography.headlineSmall)
@@ -172,6 +203,7 @@ fun OnboardingScreen(
                         setupFlow = cloudConnectRequired || localSetupOnly,
                     )
                 },
+                enabled = step == 0 || (ui.loaded && !ui.loading),
                 modifier = Modifier.fillMaxWidth().padding(24.dp).height(52.dp),
             ) { Text(stringResource(R.string.next)) }
         }
