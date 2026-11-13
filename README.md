@@ -7,7 +7,7 @@ Android inventory, sales, expiry and khata app for small retailers. Kotlin, Jetp
 2. Copy `local.properties.example` to `local.properties`; set `sdk.dir`, `supabase.url`, `supabase.anonKey` (anon key only).
 3. Sync Gradle, run on a device/emulator (minSdk 24).
 4. JVM tests: `./gradlew test`. Device tests (sale transaction, FEFO, rollback): `./gradlew connectedAndroidTest`.
-5. Supabase: run `supabase/schema.sql` in the SQL editor. Enable email/password sign-up and confirm email in Auth settings. Add `storevia://auth/callback` to Authentication -> URL Configuration -> Redirect URLs. Signup uses PKCE and returns confirmation callbacks to this Android deep link; the Cloud account screen can resend an expired confirmation. The script creates the private backup bucket and its row-level policies.
+5. Supabase: run `supabase/schema.sql` in the SQL editor. Enable email/password sign-up and confirm email in Auth settings. Add `storevia://auth/callback` to Authentication -> URL Configuration -> Redirect URLs. To enable Google sign-in, enable the Google provider, configure its OAuth client credentials, and add the callback URI shown by Supabase to the Google OAuth client's authorized redirect URIs. Signup uses PKCE and returns callbacks to this Android deep link; the Cloud account screen can resend an expired confirmation. The script creates the private backup bucket and its row-level policies.
 
 ## Architecture rules
 - UI typography uses the bundled Roboto face to remain consistent across Android OEM font settings. Roboto is licensed under Apache-2.0; see `app/src/main/assets/Roboto-LICENSE.txt`.

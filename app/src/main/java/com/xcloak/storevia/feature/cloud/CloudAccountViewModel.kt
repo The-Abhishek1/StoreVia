@@ -277,6 +277,29 @@ class CloudAccountViewModel @Inject constructor(
         }
     }
 
+    fun signInWithGoogle() {
+        if (!cloud.isConfigured) {
+            _ui.update { it.copy(message = "Cloud sign-in is not configured on this app.") }
+            return
+        }
+        viewModelScope.launch {
+            _ui.update { it.copy(busy = true, message = null) }
+            try {
+                cloud.signInWithGoogle()
+                _ui.update { it.copy(busy = false) }
+            } catch (error: Exception) {
+                _ui.update {
+                    it.copy(
+                        accountIdentifier = cloud.signedInIdentifier(),
+                        busy = false,
+                        message = CloudAuthError.message(error)
+                            ?: safeCloudError(error, "Google sign-in failed. Try again or use your email and password."),
+                    )
+                }
+            }
+        }
+    }
+
     fun sendPasswordReset(identifier: String) = viewModelScope.launch {
         val email = identifier.trim()
         if (!email.contains("@")) {

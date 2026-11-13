@@ -4,9 +4,15 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Inventory2
+import androidx.compose.material.icons.filled.Storefront
+import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -41,6 +47,9 @@ internal fun shouldClearCloudRegistrationDetails(
     loaded: Boolean,
     step: Int,
 ): Boolean = cloudConnectRequired && clearRegistrationDetailsOnStart && loaded && step == 0
+
+internal fun canSkipOnboarding(localSetupOnly: Boolean, cloudConnectRequired: Boolean): Boolean =
+    !localSetupOnly && !cloudConnectRequired
 
 /** Collects business details before the cloud credentials screen or local workspace creation. */
 @OptIn(ExperimentalLayoutApi::class)
@@ -96,16 +105,85 @@ fun OnboardingScreen(
         Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
         Column(Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(horizontal = 24.dp, vertical = 20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
             val displayedStep = step + 1
-            Text(stringResource(R.string.step_of, displayedStep, steps), style = MaterialTheme.typography.labelLarge)
+            Row(
+                Modifier.fillMaxWidth(),
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            ) {
+                Text(
+                    stringResource(R.string.step_of, displayedStep, steps),
+                    modifier = Modifier.weight(1f),
+                    style = MaterialTheme.typography.labelLarge,
+                )
+                if (canSkipOnboarding(localSetupOnly, cloudConnectRequired)) {
+                    TextButton(onClick = { vm.finish(); onFinish() }) {
+                        Text(stringResource(R.string.onboarding_skip))
+                    }
+                }
+            }
             LinearProgressIndicator(
                 progress = { if (cloudConnectRequired) displayedStep / 4f else displayedStep / steps.toFloat() },
                 modifier = Modifier.fillMaxWidth(),
             )
 
-            when (step) {
+            val stepIcons = if (cloudConnectRequired) {
+                listOf(Icons.Filled.Storefront, Icons.Filled.Edit, Icons.Filled.Inventory2, Icons.Filled.Cloud)
+            } else {
+                listOf(Icons.Filled.Storefront, Icons.Filled.Edit, Icons.Filled.Inventory2)
+            }
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+            ) {
+                stepIcons.forEachIndexed { index, icon ->
+                    Surface(
+                        modifier = Modifier
+                            .size(42.dp)
+                            .clickable(enabled = index < step) { step = index },
+                        shape = MaterialTheme.shapes.large,
+                        color = if (index <= step) {
+                            MaterialTheme.colorScheme.primaryContainer
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant
+                        },
+                    ) {
+                        Box(contentAlignment = androidx.compose.ui.Alignment.Center) {
+                            Icon(
+                                icon,
+                                contentDescription = stringResource(
+                                    when (index) {
+                                        0 -> R.string.onboarding_step_business_type
+                                        1 -> R.string.onboarding_step_store_details
+                                        2 -> R.string.onboarding_step_products
+                                        else -> R.string.cloud_signup_step_credentials
+                                    },
+                                ),
+                                tint = if (index <= step) {
+                                    MaterialTheme.colorScheme.onPrimaryContainer
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                            )
+                        }
+                    }
+                }
+            }
+
+            androidx.compose.animation.AnimatedContent(
+                targetState = step,
+                label = "onboarding-step",
+            ) { currentStep ->
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(16.dp),
+            ) {
+            when (currentStep) {
                 0 -> {
-                    Text(stringResource(R.string.onboarding_welcome), style = MaterialTheme.typography.headlineMedium)
-                    Text(stringResource(R.string.onboarding_step1_body), style = MaterialTheme.typography.bodyLarge)
+                    OnboardingHero(
+                        icon = Icons.Filled.Storefront,
+                        title = R.string.onboarding_welcome,
+                        hint = R.string.onboarding_step1_body,
+                    )
                     if (cloudConnectRequired && internetError) {
                         Text(
                             stringResource(R.string.cloud_signup_internet_required),
@@ -133,14 +211,40 @@ fun OnboardingScreen(
                         if (features.supportsSupplierLedger) add(stringResource(R.string.feature_supplier_balance))
                         if (features.supportsWholesale) add(stringResource(R.string.feature_wholesale))
                     }
-                    if (featureText.isNotEmpty()) {
-                        Text(stringResource(R.string.store_type_features), style = MaterialTheme.typography.labelLarge)
-                        featureText.forEach { feature -> Text("• $feature", style = MaterialTheme.typography.bodyMedium) }
+                    Card(
+                        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+                    ) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(16.dp),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                        ) {
+                            Icon(Icons.Filled.Storefront, contentDescription = null, tint = MaterialTheme.colorScheme.onSecondaryContainer)
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text(
+                                    stringResource(typeLabel(selectedType)),
+                                    style = MaterialTheme.typography.titleSmall,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                )
+                                Text(
+                                    stringResource(R.string.onboarding_store_type_visual_hint),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                )
+                                featureText.forEach { feature ->
+                                    Text("• $feature", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSecondaryContainer)
+                                }
+                            }
+                        }
                     }
                 }
                 1 -> {
-                    Text(stringResource(R.string.onboarding_step2_title), style = MaterialTheme.typography.headlineSmall)
-                    Text(stringResource(R.string.onboarding_step2_body), style = MaterialTheme.typography.bodyLarge)
+                    OnboardingHero(
+                        icon = Icons.Filled.Edit,
+                        title = R.string.onboarding_step2_title,
+                        hint = R.string.onboarding_step2_body,
+                        detail = R.string.onboarding_store_details_visual_hint,
+                    )
                     when {
                         ui.loading -> CircularProgressIndicator()
                         !ui.loaded -> {
@@ -168,8 +272,12 @@ fun OnboardingScreen(
                     }
                 }
                 else -> {
-                    Text(stringResource(R.string.onboarding_step3_title), style = MaterialTheme.typography.headlineSmall)
-                    Text(stringResource(R.string.onboarding_step3_body), style = MaterialTheme.typography.bodyLarge)
+                    OnboardingHero(
+                        icon = Icons.Filled.Inventory2,
+                        title = R.string.onboarding_step3_title,
+                        hint = R.string.onboarding_step3_body,
+                        detail = R.string.onboarding_products_visual_hint,
+                    )
                     if (localSetupOnly) {
                         Text(stringResource(R.string.entry_offline_setup_complete_hint), style = MaterialTheme.typography.bodyMedium)
                         Button(onClick = { vm.finish(); onFinish() }, modifier = Modifier.fillMaxWidth().height(52.dp)) {
@@ -184,6 +292,8 @@ fun OnboardingScreen(
                         OutlinedButton(onClick = { vm.finish(); onAddProduct() }, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text(stringResource(R.string.onboarding_add_first)) }
                         TextButton(onClick = { vm.finish(); onFinish() }, modifier = Modifier.fillMaxWidth()) { Text(stringResource(R.string.onboarding_later)) }
                     }
+                }
+                }
                 }
             }
         }
@@ -207,6 +317,44 @@ fun OnboardingScreen(
                 modifier = Modifier.fillMaxWidth().padding(24.dp).height(52.dp),
             ) { Text(stringResource(R.string.next)) }
         }
+        }
+    }
+}
+
+@Composable
+private fun OnboardingHero(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: Int,
+    hint: Int,
+    detail: Int? = null,
+) {
+    Card(
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer),
+        shape = MaterialTheme.shapes.extraLarge,
+    ) {
+        Row(
+            Modifier.fillMaxWidth().padding(18.dp),
+            horizontalArrangement = Arrangement.spacedBy(14.dp),
+            verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+        ) {
+            Surface(
+                shape = MaterialTheme.shapes.large,
+                color = MaterialTheme.colorScheme.surface,
+            ) {
+                Icon(
+                    icon,
+                    contentDescription = null,
+                    modifier = Modifier.padding(14.dp).size(32.dp),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+            }
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(stringResource(title), style = MaterialTheme.typography.titleLarge, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                Text(stringResource(hint), style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                detail?.let {
+                    Text(stringResource(it), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
+                }
+            }
         }
     }
 }

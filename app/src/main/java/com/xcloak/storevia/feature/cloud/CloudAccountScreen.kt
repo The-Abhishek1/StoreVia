@@ -17,6 +17,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.AlternateEmail
+import androidx.compose.material.icons.filled.AccountCircle
 import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Visibility
@@ -178,6 +179,32 @@ fun CloudAccountScreen(
                                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                     FilterChip(selected = !createAccount, onClick = { createAccount = false }, label = { Text(stringResource(R.string.cloud_mode_sign_in)) })
                                     FilterChip(selected = createAccount, onClick = { createAccount = true }, label = { Text(stringResource(R.string.cloud_mode_sign_up)) })
+                                }
+                            }
+                            if (!createOnly && !joinOnly) {
+                                OutlinedButton(
+                                    onClick = vm::signInWithGoogle,
+                                    enabled = !ui.busy,
+                                    modifier = Modifier.fillMaxWidth().height(50.dp),
+                                ) {
+                                    Icon(Icons.Filled.AccountCircle, contentDescription = null)
+                                    Text(
+                                        stringResource(R.string.cloud_continue_with_google),
+                                        Modifier.padding(start = 8.dp),
+                                    )
+                                }
+                                Row(
+                                    Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                    verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                                ) {
+                                    HorizontalDivider(Modifier.weight(1f))
+                                    Text(
+                                        stringResource(R.string.cloud_or_email),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    )
+                                    HorizontalDivider(Modifier.weight(1f))
                                 }
                             }
                             OutlinedTextField(

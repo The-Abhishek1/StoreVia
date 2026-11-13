@@ -603,6 +603,13 @@
     <!-- Onboarding -->
     <string name="onboarding_welcome">Welcome to Storevia</string>
     <string name="onboarding_step1_body">Choose the business type that best describes your store.</string>
+    <string name="onboarding_skip">Skip for now</string>
+    <string name="onboarding_step_business_type">Choose your business type</string>
+    <string name="onboarding_step_store_details">Tell us about your store</string>
+    <string name="onboarding_step_products">Start with your products</string>
+    <string name="onboarding_store_type_visual_hint">Your choice tailors inventory and reports to your business.</string>
+    <string name="onboarding_store_details_visual_hint">Add the details that appear on receipts and help identify your shop.</string>
+    <string name="onboarding_products_visual_hint">Import a spreadsheet or add products one at a time. You can do this later.</string>
     <string name="cloud_signup_internet_required">Internet is required for cloud store setup. Connect to the internet to continue.</string>
     <string name="onboarding_step2_title">Store details</string>
     <string name="onboarding_step2_body">Enter your business and contact details. GSTIN is optional.</string>
@@ -879,6 +886,9 @@
     <string name="cloud_title">Cloud account</string>
     <string name="cloud_description">Back up and sync this store across devices.</string>
     <string name="cloud_email">Email</string>
+    <string name="cloud_continue_with_google">Continue with Google</string>
+    <string name="cloud_or_email">or continue with email</string>
+    <string name="cloud_auth_callback_failed">Sign-in could not be completed. Return to Cloud account and try again.</string>
     <string name="cloud_login_identifier">Email or mobile number</string>
     <string name="cloud_login_heading">Sign in to your account</string>
     <string name="cloud_login_hint">Sign in to your Cloud account to access your business.</string>

@@ -14,6 +14,7 @@ import io.github.jan.supabase.SupabaseClient
 import io.github.jan.supabase.auth.auth
 import io.github.jan.supabase.auth.providers.builtin.Email
 import io.github.jan.supabase.auth.providers.builtin.Phone
+import io.github.jan.supabase.auth.providers.Google
 import io.github.jan.supabase.functions.functions
 import io.github.jan.supabase.postgrest.postgrest
 import io.github.jan.supabase.postgrest.from
@@ -191,6 +192,11 @@ class CloudAccountRepository @Inject constructor(
             this.email = email.trim()
             this.password = password
         }
+    }
+
+    suspend fun signInWithGoogle() {
+        requireConfigured()
+        client.auth.signInWith(Google, redirectUrl = AUTH_CALLBACK_URL)
     }
 
     suspend fun signInWithPhone(phone: String, password: String) {

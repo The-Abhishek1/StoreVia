@@ -688,7 +688,7 @@ class MainActivity : ComponentActivity() {
         if (error != null) {
             Toast.makeText(
                 this,
-                "Confirmation link expired or already used. Return to Cloud account and resend it.",
+                getString(R.string.cloud_auth_callback_failed),
                 Toast.LENGTH_LONG,
             ).show()
             return

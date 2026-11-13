@@ -36,4 +36,11 @@ class CloudRegistrationDetailsTest {
             ),
         )
     }
+
+    @Test
+    fun skippingIsAvailableOnlyForTheOptionalWalkthrough() {
+        assertTrue(canSkipOnboarding(localSetupOnly = false, cloudConnectRequired = false))
+        assertFalse(canSkipOnboarding(localSetupOnly = true, cloudConnectRequired = false))
+        assertFalse(canSkipOnboarding(localSetupOnly = false, cloudConnectRequired = true))
+    }
 }
