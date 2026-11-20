@@ -1,5 +1,10 @@
 package com.xcloak.storevia.feature.more
 
+import android.content.ActivityNotFoundException
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.widget.Toast
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -17,6 +22,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.res.stringResource
@@ -31,6 +37,17 @@ import com.xcloak.storevia.feature.staff.roleLabel
 
 private class MenuItem(val icon: ImageVector, val title: Int, val hint: Int, val allowed: (Set<Permission>) -> Boolean, val onClick: () -> Unit)
 
+private const val SUPPORT_EMAIL = "idiot63666@gmail.com"
+private const val PLAY_DEVELOPER_ID = "7987641309987531583"
+
+private fun openPlayStore(context: Context, marketUri: String, webUri: String) {
+    try {
+        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(marketUri)))
+    } catch (_: ActivityNotFoundException) {
+        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(webUri)))
+    }
+}
+
 /** Everything that is not a bottom-bar tab. An entry only appears if the signed-in person may use it. */
 @Composable
 fun MoreScreen(
@@ -41,6 +58,7 @@ fun MoreScreen(
     access: AccessViewModel = hiltViewModel(),
 ) {
     val actor = LocalActor.current
+    val context = LocalContext.current
     val staffMode by access.staffMode.collectAsStateWithLifecycle()
     var query by remember { mutableStateOf("") }
 
@@ -57,6 +75,76 @@ fun MoreScreen(
         MenuItem(Icons.Filled.Badge, R.string.more_staff, R.string.more_staff_hint, { Permission.MANAGE_STAFF in it }, onStaff),
         MenuItem(Icons.Filled.History, R.string.more_audit, R.string.more_audit_hint, { Permission.VIEW_AUDIT in it }, onAudit),
         MenuItem(Icons.Filled.Cloud, R.string.more_cloud_account, R.string.more_cloud_account_hint, { true }, onCloudAccount),
+        MenuItem(
+            Icons.Filled.Star,
+            R.string.more_rate_app,
+            R.string.more_rate_app_hint,
+            { true },
+        ) {
+            openPlayStore(
+                context,
+                "market://details?id=${context.packageName}",
+                "https://play.google.com/store/apps/details?id=${context.packageName}",
+            )
+        },
+        MenuItem(
+            Icons.Filled.SystemUpdate,
+            R.string.more_check_updates,
+            R.string.more_check_updates_hint,
+            { true },
+        ) {
+            openPlayStore(
+                context,
+                "market://details?id=${context.packageName}",
+                "https://play.google.com/store/apps/details?id=${context.packageName}",
+            )
+        },
+        MenuItem(
+            Icons.Filled.BugReport,
+            R.string.more_report_problem,
+            R.string.more_report_problem_hint,
+            { true },
+        ) {
+            val emailIntent = Intent(
+                Intent.ACTION_SENDTO,
+                Uri.parse("mailto:$SUPPORT_EMAIL?subject=${Uri.encode("StoreVia problem report")}"),
+            )
+            try {
+                context.startActivity(emailIntent)
+            } catch (_: ActivityNotFoundException) {
+                Toast.makeText(context, R.string.more_email_unavailable, Toast.LENGTH_LONG).show()
+            }
+        },
+        MenuItem(
+            Icons.Filled.Share,
+            R.string.more_share_app,
+            R.string.more_share_app_hint,
+            { true },
+        ) {
+            val shareIntent = Intent(Intent.ACTION_SEND).apply {
+                type = "text/plain"
+                putExtra(
+                    Intent.EXTRA_TEXT,
+                    context.getString(
+                        R.string.more_share_app_text,
+                        "https://play.google.com/store/apps/details?id=${context.packageName}",
+                    ),
+                )
+            }
+            context.startActivity(Intent.createChooser(shareIntent, context.getString(R.string.more_share_app)))
+        },
+        MenuItem(
+            Icons.Filled.Apps,
+            R.string.more_other_apps,
+            R.string.more_other_apps_hint,
+            { true },
+        ) {
+            openPlayStore(
+                context,
+                "market://dev?id=$PLAY_DEVELOPER_ID",
+                "https://play.google.com/store/apps/developer?id=$PLAY_DEVELOPER_ID",
+            )
+        },
     ).filter { it.allowed(actor.permissions) }
     val visibleItems = items.map { item ->
         item to (stringResource(item.title) + " " + stringResource(item.hint))

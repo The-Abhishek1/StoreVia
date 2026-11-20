@@ -41,8 +41,8 @@ android {
         applicationId = "com.xcloak.storevia"
         minSdk = 24
         targetSdk = 36
-        versionCode = 6
-        versionName = "0.1.6"
+        versionCode = 9
+        versionName = "0.1.9"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         buildConfigField("String", "SUPABASE_URL", "\"${localProps.getProperty("supabase.url", "")}\"")
